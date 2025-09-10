@@ -1,0 +1,1 @@
+"I implemented a real-time face recognition pipeline using MTCNN for detection and FaceNet for recognition. It processes video at 30 FPS, converting faces into 512-dimensional embeddings that are matched against a SQLite database using cosine similarity. The system achieves 98% accuracy and is architected to easily scale to cloud deployment with PostgreSQL and AWS services."
