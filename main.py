@@ -172,17 +172,17 @@ class SimpleFaceRecognition:
             512-dimensional embedding vector
         """
         # Convert to tensor and normalize
-        face_tensor = torch.from_numpy(face_image).float() / 255.0
-        face_tensor = (face_tensor - 0.5) / 0.5
-        face_tensor = face_tensor.permute(2, 0, 1).unsqueeze(0).to(Config.DEVICE)
+        face_tensor = torch.from_numpy(face_image).float() / 255.0 #1
+        face_tensor = (face_tensor - 0.5) / 0.5 #2
+        face_tensor = face_tensor.permute(2, 0, 1).unsqueeze(0).to(Config.DEVICE) #3
 
         # Generate embedding
-        with torch.no_grad():
+        with torch.no_grad(): #4
             embedding = self.encoder(face_tensor)
 
         # Convert to numpy and normalize
-        embedding = embedding.cpu().numpy().flatten()
-        embedding = embedding / np.linalg.norm(embedding)
+        embedding = embedding.cpu().numpy().flatten() #5
+        embedding = embedding / np.linalg.norm(embedding) #6
 
         return embedding
 
