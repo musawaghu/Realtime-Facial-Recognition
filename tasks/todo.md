@@ -28,3 +28,12 @@
 - [x] Tests: 17 new fast tests (photo held still, wrong direction, timeout, swaps, token reuse), real-photo sign test
 - [x] benchmarks/liveness_eval.py: 124/124 turned faces still match (README)
 - [ ] Manual: try it with a webcam, plus a printed photo and a phone photo
+
+# Round 3 — Hard-hat accuracy
+
+- [x] Synthetic proxy: drawn hard hat (landmark-placed dome, brim, shadow) on LFW pairs
+- [x] Finding: enrolling WITH a hat -> 3 to 20 false accepts of 3,000; enrollment screen now says remove the hat
+- [x] Finding: check-in with a hat -> accepted 98.9% to 97.0%
+- [x] Real capture kit (consent, IDs not names, embeddings only) + real eval, tested with synthetic files
+- [ ] Real captures: you + consenting friends (python scripts/capture_hardhat.py p01), then hardhat_eval.py real
+- [ ] Outdoor/glare condition (e.g. --conditions nohat hat hat_outdoor)

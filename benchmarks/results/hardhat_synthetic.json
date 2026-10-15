@@ -1,0 +1,36 @@
+{
+  "kind": "SYNTHETIC PROXY: LFW with a drawn hard hat",
+  "app_threshold": 0.4461,
+  "images": 7701,
+  "face_detected_rate": {
+    "no_hat": 0.9999,
+    "hat": 0.9997
+  },
+  "reads_as_frontal_rate": {
+    "no_hat": 0.9192,
+    "hat": 0.9189
+  },
+  "conditions": {
+    "no_hat": {
+      "accuracy_10fold": 0.9943,
+      "accepted_rate_at_app_threshold": 0.989,
+      "false_accepts_at_app_threshold": 3,
+      "impostor_pairs": 3000,
+      "tar_at_far_0.1": 0.989
+    },
+    "enrolled_bare_checkin_with_hat": {
+      "accuracy_10fold": 0.989,
+      "accepted_rate_at_app_threshold": 0.9703,
+      "false_accepts_at_app_threshold": 4,
+      "impostor_pairs": 3000,
+      "tar_at_far_0.1": 0.9697
+    },
+    "hat_on_both": {
+      "accuracy_10fold": 0.9872,
+      "accepted_rate_at_app_threshold": 0.9847,
+      "false_accepts_at_app_threshold": 20,
+      "impostor_pairs": 3000,
+      "tar_at_far_0.1": 0.936
+    }
+  }
+}
