@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Foreman Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dash">
+  <header>
+    <h1>Foreman Dashboard</h1>
+    <nav id="tabs">
+      <button data-tab="onsite" class="active">On site</button>
+      <button data-tab="hours">Hours</button>
+      <button data-tab="muster">Muster</button>
+      <button data-tab="workers">Workers</button>
+      <button data-tab="audit">Audit log</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ON SITE -->
+    <section id="tab-onsite">
+      <div class="cards">
+        <div class="card"><div class="muted">On site now</div><div class="num" id="onsite-count">–</div></div>
+        <div class="card"><div class="muted">Checked in today</div><div class="num" id="today-count">–</div></div>
+        <div class="card"><div class="muted">Missing check-outs (today)</div><div class="num" id="missing-count">–</div></div>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Trade</th><th>On site since</th><th>How</th></tr></thead>
+        <tbody id="onsite-body"></tbody>
+      </table></div>
+      <p class="muted">Refreshes every 5 seconds.</p>
+    </section>
+
+    <!-- HOURS -->
+    <section id="tab-hours" hidden>
+      <div class="toolbar">
+        <label>From <input type="date" id="hours-start"></label>
+        <label>To <input type="date" id="hours-end"></label>
+        <button id="hours-load">Show</button>
+        <button class="primary" id="hours-csv">Export CSV for payroll</button>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Name</th><th>Trade</th><th class="num">Hours</th><th class="num">Shifts</th><th>Notes</th></tr></thead>
+        <tbody id="hours-body"></tbody>
+      </table></div>
+    </section>
+
+    <!-- MUSTER -->
+    <section id="tab-muster" hidden>
+      <div id="muster-idle">
+        <p>In an emergency, start a muster. Everyone checked in right now goes on a roster you tick off at the assembly point.</p>
+        <button class="danger" id="muster-start" style="font-size:22px;padding:18px 28px">Start emergency muster</button>
+      </div>
+      <div id="muster-active" hidden>
+        <div class="muster-banner">
+          <div><div class="muted">Unaccounted for</div><div class="num" id="muster-missing"></div></div>
+          <div class="muted" id="muster-started"></div>
+          <button id="muster-close">Close muster</button>
+        </div>
+        <ul class="roster" id="muster-roster"></ul>
+      </div>
+    </section>
+
+    <!-- WORKERS -->
+    <section id="tab-workers" hidden>
+      <div class="toolbar"><button class="primary" id="enroll-open">Enroll a worker</button></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Name</th><th>Trade</th><th>Status</th><th>Face data kept until</th><th></th></tr></thead>
+        <tbody id="workers-body"></tbody>
+      </table></div>
+      <p class="muted">The worker number (#) is what workers type on the kiosk keypad with their PIN.</p>
+    </section>
+
+    <!-- AUDIT -->
+    <section id="tab-audit" hidden>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Time</th><th>Who</th><th>Action</th><th>Worker #</th><th>Detail</th></tr></thead>
+        <tbody id="audit-body"></tbody>
+      </table></div>
+    </section>
+  </main>
+
+  <!-- ENROLLMENT -->
+  <dialog id="enroll">
+    <div id="enroll-step1">
+      <h2>Enroll a worker</h2>
+      <div class="consent">
+        <strong>Biometric data consent.</strong> This site uses face recognition to record check-in and
+        check-out times and to know who is on site in an emergency. If you agree, the system stores a
+        numeric template computed from your face (not a photo). It is used only for site attendance,
+        is never sold or shared, and is deleted when you ask, or automatically one year after enrollment.
+        You may use a PIN instead of face recognition at any time.
+      </div>
+      <div class="form-grid">
+        <label class="check"><input type="checkbox" id="e-consent"> The worker has read this notice and agrees in writing.</label>
+        <label>Full name <input id="e-name" maxlength="60" autocomplete="off"></label>
+        <label>Trade <input id="e-trade" maxlength="40" placeholder="e.g. Electrician" autocomplete="off"></label>
+        <label>PIN (4–6 digits, for the keypad fallback) <input id="e-pin" inputmode="numeric" maxlength="6" autocomplete="off"></label>
+      </div>
+      <div class="error" id="e-error1"></div>
+      <div class="row"><button id="e-cancel">Cancel</button><button class="primary" id="e-next">Next: face capture</button></div>
+    </div>
+
+    <div id="enroll-step2" hidden>
+      <h2>Face capture</h2>
+      <video class="capture-video" id="e-video" autoplay playsinline muted></video>
+      <div class="pose" id="e-pose"></div>
+      <div class="dots" id="e-dots"></div>
+      <div class="error" id="e-error2"></div>
+      <div class="row"><button id="e-cancel2">Cancel</button><button class="primary" id="e-finish" disabled>Finish</button></div>
+    </div>
+  </dialog>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

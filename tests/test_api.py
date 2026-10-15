@@ -1,0 +1,241 @@
+"""API tests. The face models are replaced by a fake engine whose 'detected faces' we choose,
+so these run in seconds and test the check-in logic, auth, validation and privacy rules."""
+import cv2
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from app import api, config
+from app.db import Database
+from app.face_engine import DetectedFace, Gallery
+
+AUTH = ("foreman", "test-pass")
+
+
+def face_vec(person: int, jitter: float = 0.0) -> np.ndarray:
+    """A synthetic 'face embedding' for person N (a basis vector, optionally perturbed)."""
+    v = np.zeros(512, dtype=np.float32)
+    v[person] = 1
+    v[100 + person] = jitter
+    return v / np.linalg.norm(v)
+
+
+class FakeEngine:
+    def __init__(self):
+        self.gallery = Gallery(threshold=0.5)
+        self.next_faces: list[DetectedFace] = []
+
+    def show(self, *vecs, sizes=None):
+        """Make the 'camera' see these faces on the next frame."""
+        sizes = sizes or [100] * len(vecs)
+        self.next_faces = [DetectedFace([0, 0, s, s], 0.99, np.zeros((5, 2)), v) for v, s in zip(vecs, sizes)]
+
+    def analyze(self, rgb):
+        return self.next_faces
+
+
+@pytest.fixture
+def ctx(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "test-pass")
+    db, engine = Database(str(tmp_path / "t.db")), FakeEngine()
+    api.app.dependency_overrides = {api.get_db: lambda: db, api.get_engine: lambda: engine}
+    # fresh rate limiters per test
+    monkeypatch.setattr(api.scan_limit, "buckets", {})
+    monkeypatch.setattr(api.pin_limit, "buckets", {})
+    yield TestClient(api.app), db, engine
+    api.app.dependency_overrides = {}
+
+
+def jpeg() -> dict:
+    ok, buf = cv2.imencode(".jpg", np.zeros((64, 64, 3), np.uint8))
+    return {"file": ("frame.jpg", buf.tobytes(), "image/jpeg")}
+
+
+def enroll(client, engine, name="J. Rivera", person=1, pin="1234") -> int:
+    r = client.post("/api/enroll/start", json={"name": name, "trade": "Carpenter", "pin": pin, "consent": True}, auth=AUTH)
+    wid = r.json()["worker_id"]
+    for j in (0.0, 0.2, 0.4):
+        engine.show(face_vec(person, j))
+        assert client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH).json()["status"] == "captured"
+    assert client.post(f"/api/enroll/{wid}/finish", auth=AUTH).json()["status"] == "enrolled"
+    return wid
+
+
+# ---------- auth ----------
+@pytest.mark.parametrize("method,path", [
+    ("get", "/dashboard"), ("get", "/api/onsite"), ("get", "/api/hours.csv"), ("post", "/api/muster"),
+    ("delete", "/api/workers/1"), ("post", "/api/enroll/start"), ("get", "/api/audit")])
+def test_foreman_routes_need_password(ctx, method, path):
+    client, _, _ = ctx
+    assert getattr(client, method)(path).status_code == 401
+    assert getattr(client, method)(path, auth=("foreman", "wrong")).status_code == 401
+
+
+def test_dashboard_disabled_without_admin_password(ctx, monkeypatch):
+    client, _, _ = ctx
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "")
+    assert client.get("/api/onsite", auth=("foreman", "")).status_code == 503
+
+
+# ---------- enrollment ----------
+def test_enrollment_requires_consent(ctx):
+    client, db, _ = ctx
+    r = client.post("/api/enroll/start", json={"name": "A", "pin": "1234", "consent": False}, auth=AUTH)
+    assert r.status_code == 400 and db.list_workers() == []
+
+
+@pytest.mark.parametrize("body", [
+    {"name": "", "pin": "1234", "consent": True},
+    {"name": "x" * 61, "pin": "1234", "consent": True},
+    {"name": "A", "pin": "12", "consent": True},
+    {"name": "A", "pin": "12ab", "consent": True},
+    {"name": "A\x00B", "pin": "1234", "consent": True}])
+def test_enrollment_validates_input(ctx, body):
+    client, _, _ = ctx
+    assert client.post("/api/enroll/start", json=body, auth=AUTH).status_code == 422
+
+
+def test_enrollment_capture_rules(ctx):
+    client, db, engine = ctx
+    wid = client.post("/api/enroll/start", json={"name": "A", "pin": "1234", "consent": True}, auth=AUTH).json()["worker_id"]
+    engine.show()
+    assert client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH).json()["status"] == "no_face"
+    engine.show(face_vec(1), face_vec(2))
+    assert client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH).json()["status"] == "multiple"
+    engine.show(face_vec(1))
+    assert client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH).json()["captures"] == 1
+    engine.show(face_vec(2))   # someone else stepped in mid-enrollment
+    assert client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH).json()["status"] == "mismatch"
+    assert client.post(f"/api/enroll/{wid}/finish", auth=AUTH).status_code == 409   # only 1 capture
+    assert len(engine.gallery) == 0
+
+
+def test_bad_upload_rejected(ctx):
+    client, _, _ = ctx
+    r = client.post("/api/scan", files={"file": ("x.jpg", b"not an image", "image/jpeg")})
+    assert r.status_code == 400
+
+
+def test_duplicate_enrollment_is_flagged(ctx):
+    client, _, engine = ctx
+    enroll(client, engine, "A", person=1)
+    r = client.post("/api/enroll/start", json={"name": "A again", "pin": "9999", "consent": True}, auth=AUTH)
+    wid = r.json()["worker_id"]
+    for j in (0.1, 0.3, 0.5):
+        engine.show(face_vec(1, j))
+        client.post(f"/api/enroll/{wid}/capture", files=jpeg(), auth=AUTH)
+    assert client.post(f"/api/enroll/{wid}/finish", auth=AUTH).json()["possible_duplicate_of"] == "A"
+
+
+# ---------- kiosk ----------
+def test_face_checkin_checkout_flow(ctx, monkeypatch):
+    client, db, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(1, 0.1))
+    r = client.post("/api/scan", files=jpeg()).json()
+    assert r["status"] == "checked_in" and r["name"] == "J. Rivera"
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "cooldown"
+    assert [w["name"] for w in client.get("/api/onsite", auth=AUTH).json()] == ["J. Rivera"]
+
+    monkeypatch.setattr(config, "EVENT_COOLDOWN_S", 0)
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "checked_out"
+    assert client.get("/api/onsite", auth=AUTH).json() == []
+
+
+def test_unknown_and_no_face(ctx):
+    client, _, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(7))
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "unknown"
+    engine.show()
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "no_face"
+
+
+def test_closest_face_is_the_one_checked_in(ctx):
+    client, _, engine = ctx
+    enroll(client, engine, "Near", person=1)
+    enroll(client, engine, "Far", person=2)
+    engine.show(face_vec(2), face_vec(1), sizes=[60, 200])
+    assert client.post("/api/scan", files=jpeg()).json()["name"] == "Near"
+
+
+def test_pin_fallback_and_lockout(ctx):
+    client, _, engine = ctx
+    wid = enroll(client, engine, pin="4821")
+    assert client.post("/api/pin", json={"worker_id": wid, "pin": "0000"}).json()["status"] == "bad_pin"
+    r = client.post("/api/pin", json={"worker_id": wid, "pin": "4821"}).json()
+    assert r["status"] == "checked_in" and r["name"] == "J. Rivera"
+    for _ in range(config.PIN_MAX_FAILURES - 1):
+        client.post("/api/pin", json={"worker_id": wid, "pin": "0000"})
+    # the 5th request per device hits the rate limit before the lockout can be reached here
+    statuses = {client.post("/api/pin", json={"worker_id": wid, "pin": "0000"}).status_code for _ in range(3)}
+    assert 429 in statuses
+
+
+def test_pin_lockout_via_api(ctx, monkeypatch):
+    client, _, engine = ctx
+    monkeypatch.setattr(api.pin_limit, "burst", 100)
+    wid = enroll(client, engine, pin="4821")
+    for _ in range(config.PIN_MAX_FAILURES - 1):
+        assert client.post("/api/pin", json={"worker_id": wid, "pin": "0000"}).json()["status"] == "bad_pin"
+    assert client.post("/api/pin", json={"worker_id": wid, "pin": "0000"}).json()["status"] == "locked"
+    assert client.post("/api/pin", json={"worker_id": wid, "pin": "4821"}).json()["status"] == "locked"
+
+
+def test_scan_rate_limited(ctx):
+    client, _, engine = ctx
+    engine.show()
+    codes = [client.post("/api/scan", files=jpeg()).status_code for _ in range(15)]
+    assert codes[:10] == [200] * 10 and 429 in codes
+
+
+# ---------- privacy ----------
+def test_delete_my_data_stops_recognition(ctx):
+    client, db, engine = ctx
+    wid = enroll(client, engine)
+    engine.show(face_vec(1))
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "checked_in"
+    assert client.delete(f"/api/workers/{wid}", auth=AUTH).json()["status"] == "deleted"
+    engine.show(face_vec(1))
+    assert client.post("/api/scan", files=jpeg()).json()["status"] == "unknown"
+    assert client.post("/api/pin", json={"worker_id": wid, "pin": "1234"}).json()["status"] == "bad_pin"
+    assert client.delete(f"/api/workers/{wid}", auth=AUTH).status_code == 404
+    # attendance is still there for payroll
+    assert client.get("/api/hours", auth=AUTH).json()[0]["name"] == "J. Rivera"
+
+
+# ---------- dashboard ----------
+def test_csv_export_escapes_formulas(ctx):
+    client, db, engine = ctx
+    wid = enroll(client, engine, name="=HYPERLINK(evil)")
+    db.record_scan(wid, "pin")
+    r = client.get("/api/hours.csv", auth=AUTH)
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    assert "'=HYPERLINK(evil)" in r.text
+    assert db.list_audit()[0]["action"] == "export_hours"
+
+
+def test_csv_safe():
+    assert api.csv_safe("=1+1") == "'=1+1"
+    assert api.csv_safe("@SUM") == "'@SUM"
+    assert api.csv_safe("J. Rivera") == "J. Rivera"
+
+
+def test_invalid_date_range(ctx):
+    client, _, _ = ctx
+    assert client.get("/api/hours?start=2026-10-12&end=2026-10-01", auth=AUTH).status_code == 422
+
+
+def test_muster_flow(ctx):
+    client, db, engine = ctx
+    a = enroll(client, engine, "A", person=1)
+    enroll(client, engine, "B", person=2)
+    db.record_scan(a, "pin")
+    assert client.get("/api/muster/current", auth=AUTH).json() is None
+    m = client.post("/api/muster", auth=AUTH).json()
+    assert [e["name"] for e in m["entries"]] == ["A"] and m["missing"] == 1
+    m = client.post(f"/api/muster/{m['id']}/account/{a}", auth=AUTH).json()
+    assert m["missing"] == 0
+    assert client.get("/api/muster/current", auth=AUTH).json()["id"] == m["id"]
+    assert client.post(f"/api/muster/{m['id']}/close", auth=AUTH).json()["closed_at"]
+    assert client.post(f"/api/muster/{m['id']}/account/{a}", auth=AUTH).status_code == 404
