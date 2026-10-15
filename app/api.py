@@ -15,13 +15,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from app import config
+from app import config, liveness
 from app.db import Database
 
 STATIC = Path(__file__).parent / "static"
@@ -128,20 +128,61 @@ def dashboard_page(_: str = Depends(require_foreman)):
 
 # ============ Kiosk ============
 @app.post("/api/scan", dependencies=[Depends(scan_limit)])
-def scan(file: UploadFile = File(...), db: Database = Depends(get_db), engine=Depends(get_engine)):
-    """One camera frame from the kiosk: recognize the closest face and check them in or out."""
+def scan(file: UploadFile = File(...), challenge: str | None = Form(None),
+         db: Database = Depends(get_db), engine=Depends(get_engine)):
+    """One camera frame from the kiosk.
+
+    Without `challenge`: recognize the closest face. A recognized worker facing the camera gets
+    a liveness challenge ({"status": "turn", "direction": "left"|"right", "challenge": token}).
+    With `challenge`: keep sending frames until the worker has turned their head as asked;
+    only then are they checked in or out.
+    """
     rgb = read_image(file)
     with _engine_lock:
         faces = engine.analyze(rgb)
-        if not faces:
+        face = largest_face(faces) if faces else None
+        if challenge:
+            return _continue_challenge(challenge, face, db, engine)
+        if face is None:
             return {"status": "no_face"}
-        face = largest_face(faces)
         worker_id, similarity = engine.gallery.match(face.embedding)
     if worker_id is None:
         return {"status": "unknown", "box": face.box}
-    status, ts = db.record_scan(worker_id, "face", similarity)
-    worker = db.get_worker(worker_id)
-    return {"status": status, "name": worker["name"], "time": pretty_time(ts), "box": face.box}
+    name = db.get_worker(worker_id)["name"]
+    if (last := db.in_cooldown(worker_id)) is not None:
+        return {"status": "cooldown", "name": name, "time": pretty_time(last), "box": face.box}
+    if not liveness.is_frontal(face.landmarks):
+        return {"status": "look_straight", "box": face.box}
+    ch = challenges.create(worker_id, face.box, similarity)
+    return {"status": "turn", "challenge": ch.token, "direction": ch.direction_name, "name": name, "box": face.box}
+
+
+challenges = liveness.ChallengeStore()
+
+
+def _continue_challenge(token: str, face, db: Database, engine) -> dict:
+    """Called with _engine_lock held."""
+    ch, expired = challenges.take(token)
+    if ch is None:
+        return {"status": "challenge_failed", "reason": "unknown_challenge"}
+    if expired:
+        db.audit("kiosk", "liveness_fail", ch.worker_id, "timed out (no head turn)")
+        return {"status": "challenge_failed", "reason": "timeout"}
+    identity_ok = False
+    if face is not None:
+        # still the same worker, and not a better match for anyone else
+        best_id, _ = engine.gallery.match(face.embedding)
+        identity_ok = (best_id in (None, ch.worker_id)
+                       and engine.gallery.score(face.embedding, ch.worker_id) >= config.LIVENESS_MATCH_THRESHOLD)
+    result = liveness.step(ch, face, identity_ok)
+    if result == "turn":
+        return {"status": "turn", "challenge": token, "direction": ch.direction_name, "box": face.box}
+    challenges.close(token)
+    if result != "passed":
+        db.audit("kiosk", "liveness_fail", ch.worker_id, result.replace("_", " "))
+        return {"status": "challenge_failed", "reason": result}
+    status, ts = db.record_scan(ch.worker_id, "face", ch.similarity)
+    return {"status": status, "name": db.get_worker(ch.worker_id)["name"], "time": pretty_time(ts), "box": face.box}
 
 
 class PinCheckIn(BaseModel):

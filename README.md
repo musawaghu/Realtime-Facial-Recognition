@@ -16,7 +16,7 @@ accurate hours, and in an emergency the headcount is one click away.
 
 | | Uses | Does |
 |---|---|---|
-| **Worker** | Kiosk at the gate (tablet or laptop + camera) | Walks up, gets recognized, sees "Checked in · 6:58 AM". If recognition fails, taps **Use PIN** and enters worker number + PIN on a large keypad. |
+| **Worker** | Kiosk at the gate (tablet or laptop + camera) | Walks up, gets recognized, turns their head the way the screen asks (a liveness check), and sees "Checked in · 6:58 AM". If recognition fails, taps **Use PIN** and enters worker number + PIN on a large keypad. |
 | **Foreman** | Web dashboard | Sees who's on site now, daily hours with CSV export for payroll, an **emergency muster roster** to tick off at the assembly point, enrolls workers with consent, deletes a worker's data on request. |
 
 ## How it works
@@ -44,6 +44,21 @@ getUserMedia → JPEG every 400 ms ──▶  /api/scan                         
   paid automatically.
 - **Threshold from data.** The match threshold isn't hand-picked. `benchmarks/lfw_eval.py` sets it
   to the similarity where the false-accept rate on LFW is 0.1%.
+- **Liveness: random head turn.** Being recognized isn't enough to check in. Once a worker is
+  recognized facing the camera, the kiosk asks them to turn their head LEFT or RIGHT (random), and
+  check-in happens only after the server sees that turn. The server measures the turn ("yaw") as
+  how far the nose sits from the midpoint between the eyes, in eye-widths, using the 5 landmarks
+  MTCNN already returns, so no extra model is needed. Tilting a flat photo squeezes the eyes and
+  nose together, so it can't fake a turn. The challenge fails if:
+  - the face disappears,
+  - the face jumps or changes size (a swapped photo),
+  - the turned face stops matching the worker, or matches someone else better,
+  - or 6 seconds pass.
+
+  A worker who is already turned when recognized is asked to look straight first. Otherwise a
+  static photo of a turned face would pass half the time. Failures are written to the audit log.
+  The thresholds come from LFW: on 1,500 faces |yaw| has median 0.10 and 95th percentile 0.29.
+  "Facing straight" means ≤ 0.25, and a turn means ≥ 0.35 in the asked direction.
 
 ## Measured results
 
@@ -122,16 +137,20 @@ There is also a desktop OpenCV demo using the same engine and database: `python 
 ### Tests and benchmarks
 
 ```bash
-pytest                              # 44 fast tests (models stubbed): check-in rules, hours, PIN lockout, privacy, auth
+pytest                              # 61 fast tests (models stubbed): check-in rules, liveness, hours, PIN lockout, privacy, auth
 python benchmarks/lfw_eval.py       # downloads LFW (~180 MB), writes benchmarks/results/lfw.json
-pytest -m slow                      # real-model smoke test on LFW photos
+pytest -m slow                      # real-model tests on LFW photos (incl. head-turn direction)
 python benchmarks/speed_bench.py    # writes benchmarks/results/speed.json
+python benchmarks/liveness_eval.py  # do turned faces still match? writes benchmarks/results/liveness.json
 ```
 
 ## Limitations and next steps
 
-- **No liveness check yet.** A photo held up to the camera can check someone in. Next: a
-  random head-turn challenge using the MTCNN landmarks the engine already returns.
+- **The liveness check stops photos, not determined attackers.** A printed photo or a still
+  image on a phone can't pass. A video of the worker turning their head can pass (about half the
+  time, since the direction is random), and so can two prepared photos swapped very smoothly.
+  Stopping those needs depth/IR cameras or a trained anti-spoofing model. The PIN fallback
+  also skips the liveness check, since it is a separate factor.
 - **Hard hats aren't measured yet.** The numbers above are on LFW, not on people wearing
   hard hats in sun glare. Next: a small consented capture set, with and without headwear.
 - **CPU only so far.** Every figure above was measured without a GPU.

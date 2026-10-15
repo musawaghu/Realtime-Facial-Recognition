@@ -26,6 +26,14 @@ class Gallery:
     def __len__(self):
         return len(self.ids)
 
+    def score(self, embedding: np.ndarray, worker_id: int) -> float:
+        """Best similarity between this face and one specific worker's captures."""
+        i = np.searchsorted(self.ids, worker_id)
+        if i == len(self.ids) or self.ids[i] != worker_id:
+            return 0.0
+        end = self.starts[i + 1] if i + 1 < len(self.starts) else len(self.vectors)
+        return float(np.max(self.vectors[self.starts[i]:end] @ embedding))
+
     def match(self, embedding: np.ndarray) -> tuple[int | None, float]:
         """Return (worker_id, similarity) for the best worker, or (None, similarity) if below threshold."""
         if len(self.ids) == 0:

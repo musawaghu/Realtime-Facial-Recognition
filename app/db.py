@@ -243,6 +243,16 @@ class Database:
                       (worker_id, kind, method, similarity, _fmt(now)))
             return ("checked_in" if kind == "in" else "checked_out"), _fmt(now)
 
+    def in_cooldown(self, worker_id: int, now: datetime | None = None) -> str | None:
+        """Timestamp of the worker's last event if it was within the cooldown window, else None."""
+        now = now or datetime.now()
+        with self._conn() as c:
+            last = c.execute("SELECT ts FROM events WHERE worker_id = ? ORDER BY ts DESC, id DESC LIMIT 1",
+                             (worker_id,)).fetchone()
+        if last and now - _parse(last["ts"]) < timedelta(seconds=config.EVENT_COOLDOWN_S):
+            return last["ts"]
+        return None
+
     def on_site_now(self, now: datetime | None = None) -> list[dict]:
         """Workers whose latest event is a check-in within the max shift length."""
         now = now or datetime.now()

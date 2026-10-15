@@ -20,15 +20,24 @@ def face_vec(person: int, jitter: float = 0.0) -> np.ndarray:
     return v / np.linalg.norm(v)
 
 
+def landmarks(x0, size, yaw):
+    """5 MTCNN-style points for a face box; nose shifted sideways by `yaw` eye-widths."""
+    eye_w = 0.3 * size
+    return np.array([[x0 + 0.35 * size, 0.4 * size], [x0 + 0.65 * size, 0.4 * size],
+                     [x0 + 0.5 * size + yaw * eye_w, 0.55 * size],
+                     [x0 + 0.38 * size, 0.75 * size], [x0 + 0.62 * size, 0.75 * size]])
+
+
 class FakeEngine:
     def __init__(self):
         self.gallery = Gallery(threshold=0.5)
         self.next_faces: list[DetectedFace] = []
 
-    def show(self, *vecs, sizes=None):
-        """Make the 'camera' see these faces on the next frame."""
+    def show(self, *vecs, sizes=None, yaw=0.0, offset=0):
+        """Make the 'camera' see these faces on the next frame, with the head turned by `yaw`."""
         sizes = sizes or [100] * len(vecs)
-        self.next_faces = [DetectedFace([0, 0, s, s], 0.99, np.zeros((5, 2)), v) for v, s in zip(vecs, sizes)]
+        self.next_faces = [DetectedFace([offset, 0, offset + s, s], 0.99, landmarks(offset, s, yaw), v)
+                           for v, s in zip(vecs, sizes)]
 
     def analyze(self, rgb):
         return self.next_faces
@@ -49,6 +58,20 @@ def ctx(tmp_path, monkeypatch):
 def jpeg() -> dict:
     ok, buf = cv2.imencode(".jpg", np.zeros((64, 64, 3), np.uint8))
     return {"file": ("frame.jpg", buf.tobytes(), "image/jpeg")}
+
+
+def scan(client, challenge=None) -> dict:
+    data = {"challenge": challenge} if challenge else None
+    return client.post("/api/scan", files=jpeg(), data=data).json()
+
+
+def face_checkin(client, engine, vec) -> dict:
+    """Walk up facing the camera, then turn the way the kiosk asks."""
+    engine.show(vec)
+    r = scan(client)
+    assert r["status"] == "turn", r
+    engine.show(vec, yaw=0.5 if r["direction"] == "left" else -0.5)
+    return scan(client, r["challenge"])
 
 
 def enroll(client, engine, name="J. Rivera", person=1, pin="1234") -> int:
@@ -131,14 +154,14 @@ def test_duplicate_enrollment_is_flagged(ctx):
 def test_face_checkin_checkout_flow(ctx, monkeypatch):
     client, db, engine = ctx
     enroll(client, engine)
-    engine.show(face_vec(1, 0.1))
-    r = client.post("/api/scan", files=jpeg()).json()
+    r = face_checkin(client, engine, face_vec(1, 0.1))
     assert r["status"] == "checked_in" and r["name"] == "J. Rivera"
-    assert client.post("/api/scan", files=jpeg()).json()["status"] == "cooldown"
+    engine.show(face_vec(1, 0.1))
+    assert scan(client)["status"] == "cooldown"     # no head turn needed just to be told that
     assert [w["name"] for w in client.get("/api/onsite", auth=AUTH).json()] == ["J. Rivera"]
 
     monkeypatch.setattr(config, "EVENT_COOLDOWN_S", 0)
-    assert client.post("/api/scan", files=jpeg()).json()["status"] == "checked_out"
+    assert face_checkin(client, engine, face_vec(1, 0.1))["status"] == "checked_out"
     assert client.get("/api/onsite", auth=AUTH).json() == []
 
 
@@ -193,8 +216,7 @@ def test_scan_rate_limited(ctx):
 def test_delete_my_data_stops_recognition(ctx):
     client, db, engine = ctx
     wid = enroll(client, engine)
-    engine.show(face_vec(1))
-    assert client.post("/api/scan", files=jpeg()).json()["status"] == "checked_in"
+    assert face_checkin(client, engine, face_vec(1))["status"] == "checked_in"
     assert client.delete(f"/api/workers/{wid}", auth=AUTH).json()["status"] == "deleted"
     engine.show(face_vec(1))
     assert client.post("/api/scan", files=jpeg()).json()["status"] == "unknown"
@@ -239,3 +261,78 @@ def test_muster_flow(ctx):
     assert client.get("/api/muster/current", auth=AUTH).json()["id"] == m["id"]
     assert client.post(f"/api/muster/{m['id']}/close", auth=AUTH).json()["closed_at"]
     assert client.post(f"/api/muster/{m['id']}/account/{a}", auth=AUTH).status_code == 404
+
+
+# ---------- liveness ----------
+def turn_for(direction: str) -> float:
+    return 0.5 if direction == "left" else -0.5
+
+
+def test_recognition_alone_does_not_check_in(ctx):
+    client, db, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(1))
+    for _ in range(5):                       # a photo held still in front of the camera
+        r = scan(client)
+        assert r["status"] == "turn" and r["direction"] in ("left", "right") and r["name"] == "J. Rivera"
+        assert scan(client, r["challenge"])["status"] == "turn"
+    assert db.on_site_now() == []
+
+
+def test_turning_the_wrong_way_does_not_pass(ctx):
+    client, db, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(1))
+    r = scan(client)
+    engine.show(face_vec(1), yaw=-turn_for(r["direction"]))
+    assert scan(client, r["challenge"])["status"] == "turn"
+    assert db.on_site_now() == []
+
+
+def test_already_turned_face_gets_no_challenge(ctx):
+    client, _, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(1), yaw=0.6)        # e.g. a photo of the worker already turned
+    assert scan(client)["status"] == "look_straight"
+
+
+def test_challenge_times_out(ctx, monkeypatch):
+    client, db, engine = ctx
+    enroll(client, engine)
+    clock = [1000.0]
+    monkeypatch.setattr(api.challenges, "clock", lambda: clock[0])
+    engine.show(face_vec(1))
+    r = scan(client)
+    clock[0] += config.LIVENESS_TIMEOUT_S + 1
+    engine.show(face_vec(1), yaw=turn_for(r["direction"]))
+    assert scan(client, r["challenge"]) == {"status": "challenge_failed", "reason": "timeout"}
+    assert db.on_site_now() == [] and db.list_audit()[0]["action"] == "liveness_fail"
+
+
+@pytest.mark.parametrize("swap", ["different_person", "lost_face", "jumped_box"])
+def test_challenge_fails_if_the_face_changes(ctx, swap):
+    client, db, engine = ctx
+    enroll(client, engine, "A", person=1)
+    enroll(client, engine, "B", person=2)
+    engine.show(face_vec(1))
+    r = scan(client)
+    turn = turn_for(r["direction"])
+    if swap == "different_person":           # B steps in and does the turn for A
+        engine.show(face_vec(2), yaw=turn)
+    elif swap == "lost_face":                # photo pulled away
+        engine.show()
+    else:                                    # a second, turned photo held somewhere else
+        engine.show(face_vec(1), yaw=turn, offset=300)
+    assert scan(client, r["challenge"]) == {"status": "challenge_failed", "reason": swap.replace("jumped_box", "lost_face")}
+    assert db.on_site_now() == []
+    assert db.list_audit()[0]["action"] == "liveness_fail"
+
+
+def test_challenge_token_is_single_use(ctx):
+    client, _, engine = ctx
+    enroll(client, engine)
+    engine.show(face_vec(1))
+    r = scan(client)
+    engine.show(face_vec(1), yaw=turn_for(r["direction"]))
+    assert scan(client, r["challenge"])["status"] == "checked_in"
+    assert scan(client, r["challenge"]) == {"status": "challenge_failed", "reason": "unknown_challenge"}
