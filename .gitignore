@@ -1,0 +1,17 @@
+# Secrets and biometric data — never commit
+.env
+*.db
+*.db-journal
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# IDE (per-user state)
+.idea/workspace.xml
+
+# Benchmark data and raw outputs
+benchmarks/data/
+benchmarks/results/*.npy
