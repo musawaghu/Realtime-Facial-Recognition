@@ -26,5 +26,5 @@
 - [x] Identity re-checked on the turned face (LFW 1%-FAR threshold), audit log on failure
 - [x] Kiosk prompt (arrow + text), faster sampling during the challenge
 - [x] Tests: 17 new fast tests (photo held still, wrong direction, timeout, swaps, token reuse), real-photo sign test
-- [ ] benchmarks/liveness_eval.py result in README (running)
+- [x] benchmarks/liveness_eval.py: 124/124 turned faces still match (README)
 - [ ] Manual: try it with a webcam, plus a printed photo and a phone photo

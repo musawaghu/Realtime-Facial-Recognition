@@ -1,0 +1,17 @@
+{
+  "photos": 6733,
+  "abs_yaw_percentiles_50_90_95_99": [
+    0.09,
+    0.232,
+    0.283,
+    0.389
+  ],
+  "frontal_yaw_max": 0.25,
+  "turn_yaw_min": 0.35,
+  "share_of_photos_frontal": 0.92,
+  "turned_faces_tested": 124,
+  "turned_match_rate_at_liveness_threshold": 1.0,
+  "liveness_match_threshold": 0.3924,
+  "turned_match_rate_at_strict_threshold": 1.0,
+  "strict_threshold": 0.4461
+}

@@ -90,6 +90,16 @@ also grows with the number of enrolled workers.
 | Desktop demo, models on every 3rd frame | ~44 FPS model-bound (calculated), so it keeps up with a 30 FPS webcam |
 | Kiosk `/api/scan` (JPEG decode + pipeline + DB write, in-process) | **69.7 ms** |
 
+**Liveness: does a turned head still match?** (`benchmarks/liveness_eval.py`, LFW)
+
+| Metric | Result |
+|---|---|
+| Turned faces (yaw ≥ 0.35) still matching 3 frontal photos of the same person | **124 / 124**, at both the liveness threshold (0.392) and the strict check-in threshold (0.446) |
+| Photos that read as facing straight (\|yaw\| ≤ 0.25) | 92% of 6,733. The rest would first be asked to look straight |
+
+124 is a small sample. Zero failures in 124 means the true pass rate is very likely at least
+97.6% (rule of three), not that it is 100%.
+
 The kiosk sends a frame every 400 ms. From a face entering the frame to the confirmation
 screen is about one scan interval plus about 70 ms of server time, plus network latency when
 the server isn't on the same machine.
