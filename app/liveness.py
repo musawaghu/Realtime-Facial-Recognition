@@ -54,6 +54,7 @@ class Challenge:
     similarity: float         # recognition score from the frontal frame
     started: float
     token: str = field(default_factory=lambda: secrets.token_urlsafe(16))
+    ppe: dict | None = None   # PPE seen on the frontal frame, recorded if the challenge passes
 
     @property
     def direction_name(self) -> str:

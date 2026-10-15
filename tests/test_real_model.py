@@ -60,3 +60,24 @@ def test_head_turn_direction_on_a_real_photo(engine):
     assert liveness.yaw(lm[0]) > config.LIVENESS_TURN_YAW
     _, _, lm = engine.detect(rgb[:, ::-1].copy())          # mirror image: turned to his right
     assert liveness.yaw(lm[0]) < -config.LIVENESS_TURN_YAW
+
+
+PPE_TEST = Path(__file__).resolve().parent.parent / "benchmarks" / "data" / "construction-ppe"
+
+
+@pytest.mark.skipif(not PPE_TEST.exists(), reason="run scripts/train_ppe.py first")
+def test_ppe_detector_finds_labeled_helmets():
+    """On held-out test photos whose labels contain a helmet, the trained detector finds one."""
+    from app import config
+    if not config.PPE_WEIGHTS.exists():
+        pytest.skip("run scripts/train_ppe.py first")
+    from app.ppe import PPEChecker
+    checker = PPEChecker()
+    labeled = [p for p in sorted((PPE_TEST / "labels" / "test").glob("*.txt"))
+               if any(line.split()[0] == "0" for line in p.read_text().splitlines() if line.strip())][:20]
+    found = 0
+    for label in labeled:
+        img = next((PPE_TEST / "images" / "test").glob(label.stem + ".*"))
+        rgb = np.asarray(Image.open(img).convert("RGB"))
+        found += any(d.name == "helmet" for d in checker.detect(rgb))
+    assert labeled and found / len(labeled) >= 0.8

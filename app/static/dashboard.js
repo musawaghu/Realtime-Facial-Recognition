@@ -57,13 +57,23 @@ loaders.onsite = async () => {
   $("onsite-count").textContent = onsite.length;
   $("today-count").textContent = hours.length;
   $("missing-count").textContent = hours.filter(h => h.missing_checkout).length;
+  $("ppe-count").textContent = onsite.filter(w => w.hard_hat === 0 || w.vest === 0).length;
   fillTable($("onsite-body"), onsite, w => {
     const tr = document.createElement("tr");
-    tr.append(cell(w.name), cell(w.trade), cell(time(w.since)), cell(w.method === "pin" ? "PIN" : "Face"));
+    tr.append(cell(w.name), cell(w.trade), cell(time(w.since)), cell(w.method === "pin" ? "PIN" : "Face"), ppeCell(w));
     return tr;
   }, "Nobody is checked in right now.");
 };
 setInterval(() => current === "onsite" && loaders.onsite().catch(() => {}), 5000);
+
+// PPE seen by the kiosk camera at check-in: 1 yes, 0 no, null not checked (PIN, no detector, torso out of view)
+function ppeCell(w) {
+  const td = cell("");
+  if (w.hard_hat === 0) td.appendChild(tag("no hard hat", "warn"));
+  if (w.vest === 0) td.appendChild(tag("no vest", "warn"));
+  if (!td.childNodes.length) td.textContent = w.hard_hat === 1 && w.vest === 1 ? "✓" : w.hard_hat === 1 ? "✓ hat" : "—";
+  return td;
+}
 
 // ---------- hours ----------
 $("hours-start").value = $("hours-end").value = today();

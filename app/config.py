@@ -42,6 +42,10 @@ LIVENESS_TIMEOUT_S = 6
 # looser LFW threshold at 1% false accepts (the frontal frame already passed the strict one).
 LIVENESS_MATCH_THRESHOLD = _benchmark_threshold("threshold_far_1", default=0.4)
 
+# PPE check (hard hat + vest). Off automatically if the weights file is missing.
+PPE_WEIGHTS = ROOT / "models" / "ppe_yolo11n.pt"   # made by scripts/train_ppe.py
+PPE_CONF = 0.4               # detector confidence needed to count a helmet / vest
+
 # Enrollment
 MIN_ENROLL_CAPTURES = 3
 MAX_ENROLL_CAPTURES = 5

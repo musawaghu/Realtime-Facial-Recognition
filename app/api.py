@@ -47,6 +47,15 @@ def get_engine():
     return engine
 
 
+@lru_cache
+def get_ppe():
+    """The PPE detector, or None if it hasn't been trained (scripts/train_ppe.py)."""
+    if not config.PPE_WEIGHTS.exists():
+        return None
+    from app.ppe import PPEChecker
+    return PPEChecker()
+
+
 def reload_gallery(db: Database, engine):
     ids, vectors = db.gallery()
     with _engine_lock:   # don't swap the matrix while a scan is matching against it
@@ -129,13 +138,14 @@ def dashboard_page(_: str = Depends(require_foreman)):
 # ============ Kiosk ============
 @app.post("/api/scan", dependencies=[Depends(scan_limit)])
 def scan(file: UploadFile = File(...), challenge: str | None = Form(None),
-         db: Database = Depends(get_db), engine=Depends(get_engine)):
+         db: Database = Depends(get_db), engine=Depends(get_engine), ppe=Depends(get_ppe)):
     """One camera frame from the kiosk.
 
     Without `challenge`: recognize the closest face. A recognized worker facing the camera gets
     a liveness challenge ({"status": "turn", "direction": "left"|"right", "challenge": token}).
     With `challenge`: keep sending frames until the worker has turned their head as asked;
-    only then are they checked in or out.
+    only then are they checked in or out. Hard hat / vest are checked on the frontal frame;
+    missing PPE is reported back ("ppe") and logged, but never blocks the check-in.
     """
     rgb = read_image(file)
     with _engine_lock:
@@ -154,6 +164,9 @@ def scan(file: UploadFile = File(...), challenge: str | None = Form(None),
     if not liveness.is_frontal(face.landmarks):
         return {"status": "look_straight", "box": face.box}
     ch = challenges.create(worker_id, face.box, similarity)
+    if ppe is not None:
+        with _engine_lock:
+            ch.ppe = ppe.check(rgb, face.box)
     return {"status": "turn", "challenge": ch.token, "direction": ch.direction_name, "name": name, "box": face.box}
 
 
@@ -181,8 +194,9 @@ def _continue_challenge(token: str, face, db: Database, engine) -> dict:
     if result != "passed":
         db.audit("kiosk", "liveness_fail", ch.worker_id, result.replace("_", " "))
         return {"status": "challenge_failed", "reason": result}
-    status, ts = db.record_scan(ch.worker_id, "face", ch.similarity)
-    return {"status": status, "name": db.get_worker(ch.worker_id)["name"], "time": pretty_time(ts), "box": face.box}
+    status, ts = db.record_scan(ch.worker_id, "face", ch.similarity, ppe=ch.ppe)
+    return {"status": status, "name": db.get_worker(ch.worker_id)["name"], "time": pretty_time(ts),
+            "box": face.box, "ppe": ch.ppe}
 
 
 class PinCheckIn(BaseModel):
