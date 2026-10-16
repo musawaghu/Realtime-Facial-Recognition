@@ -10,7 +10,7 @@ Writes:
 
 Run:  python scripts/train_ppe.py [--epochs 40]
       python scripts/train_ppe.py --eval-only      # re-measure existing weights
-CPU training takes a few hours; it can be stopped and resumed with --resume.
+Uses the NVIDIA GPU when available (minutes); on CPU it takes hours. Resume with --resume.
 
 License note: Ultralytics and the Construction-PPE dataset are AGPL-3.0.
 """
@@ -30,6 +30,11 @@ RUNS = DATA / "ppe_runs"
 WEIGHTS = ROOT / "models" / "ppe_yolo11n.pt"
 RESULTS = ROOT / "benchmarks" / "results" / "ppe.json"
 CLASSES_WE_USE = ["helmet", "no_helmet", "vest", "Person"]
+
+
+def device() -> str:
+    import torch
+    return "0" if torch.cuda.is_available() else "cpu"
 
 
 def dataset_yaml() -> Path:
@@ -60,7 +65,8 @@ def train(epochs: int, resume: bool):
         base.parent.mkdir(exist_ok=True)
         attempt_download_asset(str(base))
     model = YOLO(str(last) if resume else str(base))
-    model.train(data=str(data), epochs=epochs, imgsz=640, batch=16, device="cpu", workers=4,
+    # workers=2 keeps system RAM use modest (4 loader processes ran the machine out of memory)
+    model.train(data=str(data), epochs=epochs, imgsz=640, batch=16, device=device(), workers=2,
                 patience=15, project=str(RUNS), name="train", exist_ok=True, resume=resume, seed=0,
                 plots=False)
     WEIGHTS.parent.mkdir(exist_ok=True)
@@ -71,7 +77,7 @@ def train(epochs: int, resume: bool):
 def evaluate():
     from ultralytics import YOLO
     model = YOLO(str(WEIGHTS))
-    metrics = model.val(data=str(dataset_yaml()), split="test", imgsz=640, device="cpu",
+    metrics = model.val(data=str(dataset_yaml()), split="test", imgsz=640, device=device(),
                         project=str(RUNS), name="test", exist_ok=True, plots=False)
     names = model.names
     per_class = {}
@@ -82,25 +88,34 @@ def evaluate():
             per_class[name] = {"precision": round(float(p), 3), "recall": round(float(r), 3),
                                "mAP50": round(float(ap50), 3), "mAP50_95": round(float(ap), 3)}
 
-    # speed on a kiosk-sized frame (480x360)
+    # speed on a kiosk-sized frame (480x360), on CPU and (if present) GPU
     frame = np.zeros((360, 480, 3), np.uint8)
-    model.predict(frame, imgsz=480, device="cpu", verbose=False)       # warm-up
-    t = time.perf_counter()
-    for _ in range(20):
-        model.predict(frame, imgsz=480, device="cpu", verbose=False)
-    ms = (time.perf_counter() - t) / 20 * 1000
+    speed = {}
+    for dev in dict.fromkeys(["cpu", device()]):
+        fresh = YOLO(str(WEIGHTS))   # a model can't move devices after val() has fused it
+        fresh.predict(frame, imgsz=480, device=dev, verbose=False)       # warm-up
+        t = time.perf_counter()
+        for _ in range(20):
+            fresh.predict(frame, imgsz=480, device=dev, verbose=False)
+        speed["gpu" if dev != "cpu" else "cpu"] = round((time.perf_counter() - t) / 20 * 1000, 1)
 
     result = {
         "model": "YOLO11n fine-tuned on Construction-PPE (Ultralytics 8.3.253)",
         "split": "test (141 images, never used in training)",
         "classes": per_class,
         "all_classes_mAP50": round(float(metrics.box.map50), 3),
-        "inference_ms_480x360_cpu": round(ms, 1),
+        "inference_ms_480x360": speed,
         "cpu": platform.processor(),
+        "gpu": _gpu_name(),
     }
     RESULTS.parent.mkdir(parents=True, exist_ok=True)
     RESULTS.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
+
+
+def _gpu_name():
+    import torch
+    return torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
 
 
 def main():

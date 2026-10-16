@@ -59,6 +59,18 @@ getUserMedia → JPEG every 400 ms ──▶  /api/scan                         
   static photo of a turned face would pass half the time. Failures are written to the audit log.
   The thresholds come from LFW: on 1,500 faces |yaw| has median 0.10 and 95th percentile 0.29.
   "Facing straight" means ≤ 0.25, and a turn means ≥ 0.35 in the asked direction.
+- **PPE check: warn, never block.** A YOLO11n detector, fine-tuned on Ultralytics'
+  Construction-PPE dataset (1,416 real jobsite photos), looks for hard hats and hi-vis vests in
+  the frontal frame. Detections are matched to the person checking in by position:
+  - a helmet counts only if it sits on top of *their* face,
+  - a vest counts only if it's on *their* torso,
+  - so a coworker's vest in the background or a hat held in the hand doesn't count.
+  - If the camera can't see the torso, the vest is recorded as *unknown*, never as missing.
+
+  Missing PPE never stops a check-in, because a missed detection must not strand someone at the
+  gate. Instead the kiosk shows "No hard hat detected. Put it on before entering the site.", the
+  check-in event stores what was seen, the audit log records it, and the dashboard shows PPE
+  for everyone on site.
 
 ## Measured results
 
@@ -129,6 +141,27 @@ What this means for the product:
   without a real hat, saving embeddings only, and `benchmarks/hardhat_eval.py real` scores them
   the way the kiosk does.
 
+**PPE detector** (`scripts/train_ppe.py`), measured on Construction-PPE's **test split**: 141
+real jobsite photos never used in training. 40 epochs took 7 minutes on an RTX 2060 SUPER
+(about 6 minutes *per epoch* on the CPU).
+
+| Class | Precision | Recall | mAP50 |
+|---|---|---|---|
+| helmet | 0.889 | **0.901** | 0.933 |
+| vest | 0.772 | **0.876** | 0.906 |
+| Person | 0.775 | 0.834 | 0.848 |
+| no_helmet | 0.385 | 0.225 | 0.206 |
+
+| Inference, 480×360 kiosk frame | CPU (Ryzen 7 3700X) | GPU (RTX 2060 SUPER) |
+|---|---|---|
+| PPE detector | 61 ms | 15.6 ms |
+
+- The check finds about 9 in 10 hard hats and vests.
+- The "no_helmet" class is weak, with only 40 examples in the test set. The kiosk doesn't depend
+  on it: no helmet found on the head already means "no hard hat".
+- These photos are general jobsite scenes, not close-ups at a check-in kiosk, so accuracy at
+  the gate still has to be measured on real kiosk frames.
+
 The kiosk sends a frame every 400 ms. From a face entering the frame to the confirmation
 screen is about one scan interval plus about 70 ms of server time, plus network latency when
 the server isn't on the same machine.
@@ -155,6 +188,10 @@ schedule, and deletion. The system is built around that:
 
 Requires **Python 3.11** (facenet-pytorch needs torch 2.2 / numpy < 2).
 
+With an NVIDIA GPU, swap in the CUDA build of the same torch version after installing.
+The face models and the PPE detector then use the GPU automatically:
+`pip install --force-reinstall --no-deps torch==2.2.2+cu121 torchvision==0.17.2+cu121 --index-url https://download.pytorch.org/whl/cu121`
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate            # Windows   (source .venv/bin/activate on macOS/Linux)
@@ -162,6 +199,7 @@ pip install -r requirements.txt
 
 copy .env.example .env            # then set ADMIN_PASSWORD in .env
 python scripts/seed_demo.py       # optional: made-up crew + 2 weeks of history (no faces; PIN 1111)
+python scripts/train_ppe.py       # optional: trains the PPE detector (~7 min on a GPU); without it PPE is "not checked"
 uvicorn app.api:app
 ```
 
@@ -176,14 +214,15 @@ There is also a desktop OpenCV demo using the same engine and database: `python 
 ### Tests and benchmarks
 
 ```bash
-pytest                              # 67 fast tests (models stubbed): check-in rules, liveness, hours, PIN lockout, privacy, auth
+pytest                              # 78 fast tests (models stubbed): check-in rules, liveness, PPE, hours, PIN lockout, privacy, auth
 python benchmarks/lfw_eval.py       # downloads LFW (~180 MB), writes benchmarks/results/lfw.json
-pytest -m slow                      # real-model tests on LFW photos (incl. head-turn direction)
+pytest -m slow                      # real-model tests: LFW photos (incl. head-turn direction), PPE detector on test photos
 python benchmarks/speed_bench.py    # writes benchmarks/results/speed.json
 python benchmarks/liveness_eval.py  # do turned faces still match? writes benchmarks/results/liveness.json
 python benchmarks/hardhat_eval.py synthetic   # LFW with a drawn hard hat (proxy)
 python scripts/capture_hardhat.py p01         # real captures, with consent; embeddings only
 python benchmarks/hardhat_eval.py real        # score the real captures
+python scripts/train_ppe.py --eval-only       # re-measure the PPE detector, writes benchmarks/results/ppe.json
 ```
 
 ## Limitations and next steps
@@ -195,6 +234,12 @@ python benchmarks/hardhat_eval.py real        # score the real captures
   also skips the liveness check, since it is a separate factor.
 - **Hard-hat numbers are synthetic so far.** The proxy above uses drawn hats on LFW. Real
   captures (the kit is in `scripts/capture_hardhat.py`) and outdoor glare are still to measure.
-- **CPU only so far.** Every figure above was measured without a GPU.
-- Next: PPE check (hard hat and vest) before check-in, automatic deletion when the retention
-  date passes, an offline queue for sites with patchy internet, and deployment.
+- **Face benchmarks are CPU numbers.** The face figures above were measured without a GPU; only
+  the PPE detector has GPU timings so far.
+- **PPE accuracy at the gate isn't measured yet.** The PPE test set is general jobsite photos.
+  A tablet at the gate often won't see the vest at all, which is why "unknown" exists.
+- **License.** Ultralytics and the Construction-PPE dataset are AGPL-3.0. That's fine for this
+  public repo, but a closed commercial product would need an Ultralytics license or a different
+  detector. The trained weights aren't committed; `scripts/train_ppe.py` reproduces them.
+- Next: automatic deletion when the retention date passes, an offline queue for sites with
+  patchy internet, and deployment.

@@ -68,12 +68,14 @@ class PPEChecker:
     """Loads the trained detector once; `check` returns assess() for one frame."""
 
     def __init__(self, weights=config.PPE_WEIGHTS):
+        import torch
         from ultralytics import YOLO   # heavy import, only when PPE is enabled
         self.model = YOLO(str(weights))
+        self.device = "0" if torch.cuda.is_available() else "cpu"
 
     def detect(self, rgb) -> list[Detection]:
         # Ultralytics expects BGR numpy input
-        result = self.model.predict(rgb[:, :, ::-1], imgsz=480, conf=config.PPE_CONF, device="cpu", verbose=False)[0]
+        result = self.model.predict(rgb[:, :, ::-1], imgsz=480, conf=config.PPE_CONF, device=self.device, verbose=False)[0]
         names = result.names
         return [Detection(names[int(c)], float(p), [float(v) for v in b])
                 for b, p, c in zip(result.boxes.xyxy.tolist(), result.boxes.conf.tolist(), result.boxes.cls.tolist())]
