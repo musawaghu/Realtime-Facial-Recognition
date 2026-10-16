@@ -77,7 +77,9 @@ function ppeCell(w) {
 }
 
 // ---------- hours ----------
-$("hours-start").value = $("hours-end").value = today();
+// default to the last 7 days: payroll is usually weekly
+$("hours-start").value = new Date(Date.now() - 6 * 864e5).toLocaleDateString("en-CA");
+$("hours-end").value = today();
 loaders.hours = async () => {
   const q = `start=${$("hours-start").value}&end=${$("hours-end").value}`;
   try {
