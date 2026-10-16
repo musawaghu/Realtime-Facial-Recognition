@@ -63,3 +63,12 @@ PIN_LOCKOUT_S = 300
 
 # Uploads
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+
+# Offline-first sync (see app/sync.py). On-site server: set CENTRAL_URL + SYNC_TOKEN.
+SITE_ID = os.getenv("SITE_ID", "site-1")
+CENTRAL_URL = os.getenv("CENTRAL_URL", "")
+SYNC_TOKEN = os.getenv("SYNC_TOKEN", "")
+SYNC_INTERVAL_S = 30
+SYNC_BATCH = 500
+# Central server: which sites may push, and each site's token ("site-a:tok-a,site-b:tok-b")
+SITE_TOKENS = dict(pair.split(":", 1) for pair in os.getenv("SITE_TOKENS", "").split(",") if ":" in pair)

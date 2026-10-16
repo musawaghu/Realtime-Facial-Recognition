@@ -48,6 +48,7 @@ document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
   current = b.dataset.tab;
   document.querySelectorAll("#tabs button").forEach(x => x.classList.toggle("active", x === b));
   document.querySelectorAll("main section").forEach(s => s.hidden = s.id !== `tab-${current}`);
+  history.replaceState(null, "", `#${current}`);
   loaders[current]?.();
 });
 
@@ -162,6 +163,57 @@ loaders.workers = async () => {
   }, "No workers yet. Click “Enroll a worker”.");
 };
 
+// ---------- sync status (on-site server) ----------
+const ago = ts => {
+  const m = Math.round((Date.now() - new Date(ts.replace(" ", "T"))) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+};
+async function refreshSync() {
+  const s = await api("/api/sync/status");
+  const chip = $("sync-chip");
+  chip.hidden = !s.enabled;
+  if (!s.enabled) return;
+  const behind = s.pending > 0 && s.last_error && (!s.last_success || s.last_error > s.last_success);
+  chip.className = `tag ${behind ? "warn" : ""}`;
+  chip.textContent = behind ? `Offline · ${s.pending} waiting to sync`
+    : s.last_success ? `Synced ${ago(s.last_success)}` : "Sync starting…";
+  chip.title = s.last_error || "";
+}
+refreshSync().catch(() => {});
+setInterval(() => refreshSync().catch(() => {}), 30000);
+
+// ---------- all sites (central server) ----------
+loaders.sites = async () => {
+  const sites = await api("/api/sites");
+  const list = $("sites-list");
+  list.replaceChildren();
+  for (const site of sites) {
+    const card = document.createElement("div");
+    card.className = "card site-card";
+    const h = document.createElement("h3");
+    h.append(site.id, tag(`${site.on_site.length} on site`));
+    if (site.minutes_since_sync > 10) h.appendChild(tag(`no sync for ${Math.round(site.minutes_since_sync)} min`, "warn"));
+    const sub = document.createElement("div");
+    sub.className = "muted";
+    sub.textContent = `Last sync ${ago(site.last_sync_at)}`;
+    const wrap = document.createElement("div");
+    wrap.className = "table-wrap";
+    wrap.style.marginTop = "10px";
+    const table = document.createElement("table");
+    const tbody = document.createElement("tbody");
+    fillTable(tbody, site.on_site, w => {
+      const tr = document.createElement("tr");
+      tr.append(cell(w.name), cell(w.trade), cell(time(w.since)), ppeCell(w));
+      return tr;
+    }, "Nobody on site.");
+    table.appendChild(tbody); wrap.appendChild(table);
+    card.append(h, sub, wrap);
+    list.appendChild(card);
+  }
+};
+// show the tab only on a central server that has received data
+api("/api/sites").then(s => { $("sites-tab").hidden = !s.length; }).catch(() => {});
+
 // ---------- audit ----------
 loaders.audit = async () => {
   fillTable($("audit-body"), await api("/api/audit"), a => {
@@ -262,4 +314,6 @@ $("e-cancel2").onclick = async () => {
 };
 dialog.addEventListener("close", stopCamera);
 
-loaders.onsite();
+// open the tab named in the URL (e.g. /dashboard#muster), else "On site"
+const startTab = document.querySelector(`#tabs button[data-tab="${location.hash.slice(1)}"]`);
+if (startTab) { startTab.hidden = false; startTab.click(); } else loaders.onsite();

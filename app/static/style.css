@@ -11,6 +11,7 @@
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* hidden wins over display rules */
 body { margin: 0; background: var(--bg); color: var(--text); }
 button {
   font: inherit; cursor: pointer; border: 0; border-radius: 10px;
@@ -113,6 +114,9 @@ td.num { font-variant-numeric: tabular-nums; text-align: right; }
 .empty { padding: 24px; text-align: center; color: var(--muted); }
 section[hidden] { display: none; }
 
+.dash header h1 .tag { vertical-align: middle; margin-left: 8px; font-weight: 600; }
+.site-card { margin-bottom: 16px; }
+.site-card h3 { margin: 0 0 4px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .muster-banner {
   background: #4a1515; border: 2px solid var(--bad); border-radius: 12px; padding: 16px;
   display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px;

@@ -8,13 +8,14 @@
 </head>
 <body class="dash">
   <header>
-    <h1>Foreman Dashboard</h1>
+    <h1>Foreman Dashboard <span class="tag" id="sync-chip" hidden></span></h1>
     <nav id="tabs">
       <button data-tab="onsite" class="active">On site</button>
       <button data-tab="hours">Hours</button>
       <button data-tab="muster">Muster</button>
       <button data-tab="workers">Workers</button>
       <button data-tab="audit">Audit log</button>
+      <button data-tab="sites" id="sites-tab" hidden>All sites</button>
     </nav>
   </header>
 
@@ -72,6 +73,12 @@
         <tbody id="workers-body"></tbody>
       </table></div>
       <p class="muted">The worker number (#) is what workers type on the kiosk keypad with their PIN.</p>
+    </section>
+
+    <!-- ALL SITES (central server only) -->
+    <section id="tab-sites" hidden>
+      <p class="muted">Attendance pushed by each site's own server. Sites keep working offline and catch up when the connection returns.</p>
+      <div id="sites-list"></div>
     </section>
 
     <!-- AUDIT -->

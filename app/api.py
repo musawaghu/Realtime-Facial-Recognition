@@ -20,11 +20,11 @@ import cv2
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from app import config, liveness
+from app import config, liveness, sync
 from app.db import Database
 
 STATIC = Path(__file__).parent / "static"
@@ -47,10 +47,27 @@ async def lifespan(_app):
                 log.exception("retention job failed; will retry")
             await asyncio.sleep(config.RETENTION_CHECK_S)
 
-    task = asyncio.create_task(retention_loop())
-    yield
-    task.cancel()
+    async def sync_loop():
+        """On-site server: push attendance to the central server whenever it's reachable."""
+        while True:
+            try:
+                await asyncio.to_thread(sync_client.push_once)
+            except Exception:   # e.g. database locked; network errors are handled inside push_once
+                log.exception("sync round failed; will retry")
+            await asyncio.sleep(sync_client.next_delay())
 
+    global sync_client
+    tasks = [asyncio.create_task(retention_loop())]
+    if config.CENTRAL_URL:
+        import httpx
+        sync_client = sync.SyncClient(get_db(), lambda url, **kw: httpx.post(url, timeout=10, **kw))
+        tasks.append(asyncio.create_task(sync_loop()))
+    yield
+    for task in tasks:
+        task.cancel()
+
+
+sync_client: sync.SyncClient | None = None   # set at startup on an on-site server
 
 app = FastAPI(title="Jobsite Check-in", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -417,3 +434,57 @@ def muster_close(muster_id: int, db: Database = Depends(get_db), actor: str = De
     if not db.close_muster(muster_id, actor=actor):
         raise HTTPException(404, "No such open muster")
     return db.get_muster(muster_id)
+
+
+# ============ Offline-first sync ============
+class SyncWorker(BaseModel):
+    id: int
+    name: str = Field(max_length=60)
+    trade: str = Field(default="", max_length=40)
+
+
+class SyncEvent(BaseModel):
+    id: int
+    worker_id: int
+    kind: str = Field(pattern="^(in|out)$")
+    method: str = Field(pattern="^(face|pin)$")
+    hard_hat: bool | None = None
+    vest: bool | None = None
+    ts: str = Field(pattern=r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+
+
+class SyncBatch(BaseModel):
+    site_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    workers: list[SyncWorker] = Field(max_length=2 * config.SYNC_BATCH)
+    events: list[SyncEvent] = Field(max_length=2 * config.SYNC_BATCH)
+
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+@app.post("/api/sync/events")
+def sync_ingest(batch: SyncBatch, creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
+                db: Database = Depends(get_db)):
+    """Central server: accept attendance from an on-site server (no face data, no PINs)."""
+    expected = config.SITE_TOKENS.get(batch.site_id)
+    if not config.SITE_TOKENS:
+        raise HTTPException(404, "This server doesn't accept site sync (SITE_TOKENS not set)")
+    if creds is None or expected is None or not secrets.compare_digest(creds.credentials.encode(), expected.encode()):
+        raise HTTPException(401, "Unknown site or wrong token", headers={"WWW-Authenticate": "Bearer"})
+    accepted = db.ingest_site_batch(batch.site_id, [w.model_dump() for w in batch.workers],
+                                    [e.model_dump() for e in batch.events])
+    return {"accepted": accepted}
+
+
+@app.get("/api/sync/status")
+def sync_status(db: Database = Depends(get_db), _: str = Depends(require_foreman)):
+    """On-site server: is attendance reaching the office?"""
+    if sync_client is None:
+        return {"enabled": False, "pending": db.unsynced_count()}
+    return sync_client.status()
+
+
+@app.get("/api/sites")
+def sites(db: Database = Depends(get_db), _: str = Depends(require_foreman)):
+    """Central server: every site's latest sync and who is on site there."""
+    return db.site_summaries()
