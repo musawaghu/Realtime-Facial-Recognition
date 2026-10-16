@@ -105,6 +105,9 @@
 
     <div id="enroll-step2" hidden>
       <h2>Face capture</h2>
+      <!-- Measured (benchmarks/hardhat_eval.py): enrolling WITH a hat made different people
+           look alike, about 7x more false accepts. Enroll bare-headed; check-in with a hat still works. -->
+      <p class="muted">Ask the worker to <strong>take off their hard hat</strong> for enrollment. They can wear it when checking in.</p>
       <video class="capture-video" id="e-video" autoplay playsinline muted></video>
       <div class="pose" id="e-pose"></div>
       <div class="dots" id="e-dots"></div>

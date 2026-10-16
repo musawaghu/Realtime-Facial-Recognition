@@ -100,6 +100,35 @@ also grows with the number of enrolled workers.
 124 is a small sample. Zero failures in 124 means the true pass rate is very likely at least
 97.6% (rule of three), not that it is 100%.
 
+**Hard hats: synthetic proxy** (`benchmarks/hardhat_eval.py synthetic`)
+
+These numbers come from LFW's 6,000 pairs with a hard hat *drawn on* each face: a dome, a brim
+at mid-forehead, and a shadow under the brim, placed from the face's landmarks. That makes them
+a proxy, not field data. A drawn hat misses real shadows, how a hat sits on the head, and how
+people hold their heads under one. All figures are at the threshold the kiosk uses (0.446).
+
+| | No hat | Enrolled without, check in with hat | Hat in both photos |
+|---|---|---|---|
+| Genuine check-ins accepted | 98.9% | **97.0%** | 98.5% |
+| False accepts (of 3,000 impostor pairs) | 3 | 4 | **20** |
+| 10-fold accuracy | 99.43% | 98.90% | 98.72% |
+
+| | No hat | Hat |
+|---|---|---|
+| Face detected | 99.99% | 99.97% |
+| Reads as facing straight (needed for liveness) | 91.9% | 91.9% |
+
+What this means for the product:
+
+- **Enroll without the hat.** With a hat in both photos, false accepts rose about 7×: the shared
+  hat makes different people look alike. The enrollment screen now asks the worker to take
+  their hard hat off.
+- **Checking in with a hat works, with more retries.** Rejections roughly triple (1.1% → 3.0%),
+  so roughly 1 in 33 attempts needs a second look or the PIN.
+- **Real numbers come next.** `scripts/capture_hardhat.py` records consenting people with and
+  without a real hat, saving embeddings only, and `benchmarks/hardhat_eval.py real` scores them
+  the way the kiosk does.
+
 The kiosk sends a frame every 400 ms. From a face entering the frame to the confirmation
 screen is about one scan interval plus about 70 ms of server time, plus network latency when
 the server isn't on the same machine.
@@ -147,11 +176,14 @@ There is also a desktop OpenCV demo using the same engine and database: `python 
 ### Tests and benchmarks
 
 ```bash
-pytest                              # 61 fast tests (models stubbed): check-in rules, liveness, hours, PIN lockout, privacy, auth
+pytest                              # 67 fast tests (models stubbed): check-in rules, liveness, hours, PIN lockout, privacy, auth
 python benchmarks/lfw_eval.py       # downloads LFW (~180 MB), writes benchmarks/results/lfw.json
 pytest -m slow                      # real-model tests on LFW photos (incl. head-turn direction)
 python benchmarks/speed_bench.py    # writes benchmarks/results/speed.json
 python benchmarks/liveness_eval.py  # do turned faces still match? writes benchmarks/results/liveness.json
+python benchmarks/hardhat_eval.py synthetic   # LFW with a drawn hard hat (proxy)
+python scripts/capture_hardhat.py p01         # real captures, with consent; embeddings only
+python benchmarks/hardhat_eval.py real        # score the real captures
 ```
 
 ## Limitations and next steps
@@ -161,8 +193,8 @@ python benchmarks/liveness_eval.py  # do turned faces still match? writes benchm
   time, since the direction is random), and so can two prepared photos swapped very smoothly.
   Stopping those needs depth/IR cameras or a trained anti-spoofing model. The PIN fallback
   also skips the liveness check, since it is a separate factor.
-- **Hard hats aren't measured yet.** The numbers above are on LFW, not on people wearing
-  hard hats in sun glare. Next: a small consented capture set, with and without headwear.
+- **Hard-hat numbers are synthetic so far.** The proxy above uses drawn hats on LFW. Real
+  captures (the kit is in `scripts/capture_hardhat.py`) and outdoor glare are still to measure.
 - **CPU only so far.** Every figure above was measured without a GPU.
 - Next: PPE check (hard hat and vest) before check-in, automatic deletion when the retention
   date passes, an offline queue for sites with patchy internet, and deployment.
