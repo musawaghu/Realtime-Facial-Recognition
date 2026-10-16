@@ -64,6 +64,30 @@ CREATE TABLE IF NOT EXISTS audit_log (
     worker_id INTEGER,
     detail    TEXT NOT NULL DEFAULT ''
 );
+
+-- Central server only: attendance pushed by on-site servers. Never face data or PINs.
+CREATE TABLE IF NOT EXISTS sites (
+    id           TEXT PRIMARY KEY,
+    last_sync_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS site_workers (
+    site_id    TEXT NOT NULL REFERENCES sites(id),
+    worker_id  INTEGER NOT NULL,            -- the id on that site's server
+    name       TEXT NOT NULL,
+    trade      TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (site_id, worker_id)
+);
+CREATE TABLE IF NOT EXISTS site_events (
+    site_id    TEXT NOT NULL REFERENCES sites(id),
+    event_id   INTEGER NOT NULL,            -- the id on that site's server (makes re-sends harmless)
+    worker_id  INTEGER NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('in', 'out')),
+    method     TEXT NOT NULL,
+    hard_hat   INTEGER,
+    vest       INTEGER,
+    ts         TEXT NOT NULL,
+    PRIMARY KEY (site_id, event_id)
+);
 """
 
 
@@ -85,11 +109,12 @@ class Database:
         self.path = path
         with self._conn() as c:
             c.executescript(SCHEMA)
-            # databases created before the PPE check: add its columns
+            # databases created before the PPE check / sync: add their columns
             cols = {r["name"] for r in c.execute("PRAGMA table_info(events)")}
-            for col in ("hard_hat", "vest"):
+            for col, kind in (("hard_hat", "INTEGER"), ("vest", "INTEGER"), ("synced_at", "TEXT")):
                 if col not in cols:
-                    c.execute(f"ALTER TABLE events ADD COLUMN {col} INTEGER")
+                    c.execute(f"ALTER TABLE events ADD COLUMN {col} {kind}")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_events_unsynced ON events(id) WHERE synced_at IS NULL")
 
     @contextmanager
     def _conn(self):
@@ -154,7 +179,7 @@ class Database:
             return [dict(r) for r in rows]
 
     def delete_worker_biometrics(self, worker_id: int, actor: str = "foreman",
-                                 now: datetime | None = None) -> bool:
+                                 now: datetime | None = None, reason: str = "") -> bool:
         """'Delete my data': remove face embeddings and PIN. Attendance rows stay for payroll."""
         now = now or datetime.now()
         with self._conn() as c:
@@ -164,9 +189,29 @@ class Database:
             c.execute("DELETE FROM embeddings WHERE worker_id = ?", (worker_id,))
             c.execute("""UPDATE workers SET pin_hash = NULL, pin_salt = NULL, deleted_at = ?
                          WHERE id = ?""", (_fmt(now), worker_id))
-            self.audit(actor, "delete_biometrics", worker_id, "", now, conn=c)
+            self.audit(actor, "delete_biometrics", worker_id, reason, now, conn=c)
             return True
 
+    def purge_expired(self, now: datetime | None = None) -> list[int]:
+        """Automatic deletion. Removes biometric data for:
+          - workers whose retention date has passed (a year without a check-in), and
+          - enrollments abandoned before finishing (face data for nobody).
+        Returns the worker ids purged.
+        """
+        now = now or datetime.now()
+        abandoned_before = _fmt(now - timedelta(hours=config.ENROLL_ABANDON_HOURS))
+        with self._conn() as c:
+            expired = [r["id"] for r in c.execute(
+                "SELECT id FROM workers WHERE deleted_at IS NULL AND retention_until < ?", (_fmt(now),))]
+            abandoned = [r["id"] for r in c.execute(
+                """SELECT id FROM workers WHERE deleted_at IS NULL AND enrolled_at IS NULL
+                   AND created_at < ?""", (abandoned_before,))]
+        for wid in expired:
+            self.delete_worker_biometrics(wid, actor="retention", now=now,
+                                          reason=f"no check-in for {config.RETENTION_DAYS} days")
+        for wid in set(abandoned) - set(expired):
+            self.delete_worker_biometrics(wid, actor="retention", now=now, reason="enrollment never finished")
+        return sorted(set(expired) | set(abandoned))
     # ---------- embeddings ----------
     def add_embedding(self, worker_id: int, vector: np.ndarray) -> int:
         """Store one capture; returns how many captures the worker now has."""
@@ -249,6 +294,9 @@ class Database:
                 kind = "out" if last["kind"] == "in" and not stale else "in"
             else:
                 kind = "in"
+            # every check-in or check-out restarts the retention clock
+            c.execute("UPDATE workers SET retention_until = ? WHERE id = ? AND deleted_at IS NULL",
+                      (_fmt(now + timedelta(days=config.RETENTION_DAYS)), worker_id))
             ppe = ppe or {}
             c.execute("""INSERT INTO events (worker_id, kind, method, similarity, hard_hat, vest, ts)
                          VALUES (?,?,?,?,?,?,?)""",
@@ -404,3 +452,67 @@ class Database:
         with self._conn() as c:
             row = c.execute("SELECT id FROM musters WHERE closed_at IS NULL ORDER BY id DESC LIMIT 1").fetchone()
             return row["id"] if row else None
+
+    # ---------- sync: on-site server side ----------
+    def unsynced_batch(self, limit: int) -> dict:
+        """Oldest events not yet sent to the central server, plus the workers they refer to
+        (name and trade only: never face data or PINs)."""
+        with self._conn() as c:
+            events = [dict(r) for r in c.execute(
+                """SELECT id, worker_id, kind, method, hard_hat, vest, ts FROM events
+                   WHERE synced_at IS NULL ORDER BY id LIMIT ?""", (limit,))]
+            ids = sorted({e["worker_id"] for e in events})
+            workers = [dict(r) for r in c.execute(
+                f"SELECT id, name, trade FROM workers WHERE id IN ({','.join('?' * len(ids))})", ids)] if ids else []
+        return {"workers": workers, "events": events}
+
+    def mark_synced(self, event_ids: list[int], now: datetime | None = None):
+        if not event_ids:
+            return
+        with self._conn() as c:
+            c.executemany("UPDATE events SET synced_at = ? WHERE id = ?",
+                          [(_fmt(now or datetime.now()), i) for i in event_ids])
+
+    def unsynced_count(self) -> int:
+        with self._conn() as c:
+            return c.execute("SELECT COUNT(*) FROM events WHERE synced_at IS NULL").fetchone()[0]
+
+    # ---------- sync: central server side ----------
+    def ingest_site_batch(self, site_id: str, workers: list[dict], events: list[dict],
+                          now: datetime | None = None) -> list[int]:
+        """Store a site's batch. Re-sent events are ignored, so retries after a dropped
+        connection are safe. Returns the event ids now stored (all of them, new or not)."""
+        now = now or datetime.now()
+        with self._conn() as c:
+            c.execute("""INSERT INTO sites (id, last_sync_at) VALUES (?, ?)
+                         ON CONFLICT(id) DO UPDATE SET last_sync_at = excluded.last_sync_at""",
+                      (site_id, _fmt(now)))
+            c.executemany("""INSERT INTO site_workers (site_id, worker_id, name, trade) VALUES (?,?,?,?)
+                             ON CONFLICT(site_id, worker_id) DO UPDATE SET name = excluded.name,
+                             trade = excluded.trade""",
+                          [(site_id, w["id"], w["name"], w["trade"]) for w in workers])
+            c.executemany("""INSERT OR IGNORE INTO site_events
+                             (site_id, event_id, worker_id, kind, method, hard_hat, vest, ts)
+                             VALUES (?,?,?,?,?,?,?,?)""",
+                          [(site_id, e["id"], e["worker_id"], e["kind"], e["method"], e["hard_hat"],
+                            e["vest"], e["ts"]) for e in events])
+        return [e["id"] for e in events]
+
+    def site_summaries(self, now: datetime | None = None) -> list[dict]:
+        """Per site: when it last synced, and who is on site according to its latest data."""
+        now = now or datetime.now()
+        cutoff = _fmt(now - timedelta(hours=config.MAX_SHIFT_HOURS))
+        with self._conn() as c:
+            sites = [dict(r) for r in c.execute("SELECT id, last_sync_at FROM sites ORDER BY id")]
+            for site in sites:
+                site["on_site"] = [dict(r) for r in c.execute(
+                    """SELECT w.worker_id AS id, w.name, w.trade, e.ts AS since, e.hard_hat, e.vest
+                       FROM site_events e JOIN site_workers w
+                         ON w.site_id = e.site_id AND w.worker_id = e.worker_id
+                       WHERE e.site_id = ? AND e.kind = 'in' AND e.ts >= ?
+                         AND e.event_id = (SELECT event_id FROM site_events
+                                           WHERE site_id = e.site_id AND worker_id = e.worker_id
+                                           ORDER BY ts DESC, event_id DESC LIMIT 1)
+                       ORDER BY e.ts""", (site["id"], cutoff))]
+                site["minutes_since_sync"] = round((now - _parse(site["last_sync_at"])).total_seconds() / 60, 1)
+        return sites

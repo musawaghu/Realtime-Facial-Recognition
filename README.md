@@ -3,6 +3,15 @@
 Workers check in at the gate with their face. Foremen always know who's on site, payroll gets
 accurate hours, and in an emergency the headcount is one click away.
 
+| Kiosk: liveness check | Kiosk: checked in, PPE warning |
+|---|---|
+| ![Kiosk asking the worker to turn their head left](docs/img/kiosk-turn.png) | ![Kiosk confirming check-in with a missing hard hat warning](docs/img/kiosk-ppe.png) |
+| **Dashboard: who's on site, with PPE** | **Dashboard: every site, synced from the field** |
+| ![Foreman dashboard listing workers on site with PPE flags](docs/img/dashboard-onsite.png) | ![Central dashboard showing two jobsites and who is on each](docs/img/dashboard-sites.png) |
+
+*Screenshots use made-up workers with no face data.*
+<!-- Demo video: add the link here once recorded (see docs/DEMO_SCRIPT.md) -->
+
 ## The problem
 
 - **Buddy punching.** On paper sign-in sheets or shared badges, workers clock in for absent
@@ -71,11 +80,23 @@ getUserMedia → JPEG every 400 ms ──▶  /api/scan                         
   gate. Instead the kiosk shows "No hard hat detected. Put it on before entering the site.", the
   check-in event stores what was seen, the audit log records it, and the dashboard shows PPE
   for everyone on site.
+- **Offline-first.** Each jobsite runs its own server on the kiosk laptop, so check-in, the PIN
+  fallback and the emergency muster all work with no internet. A background job pushes attendance
+  to a central server whenever it's reachable:
+  - It sends only names, trades and check-in events. Face data and PINs never leave the site.
+  - It backs off while offline and catches up in batches.
+  - Events are confirmed before they're marked as sent, and the central server ignores
+    duplicates, so a push cut off mid-way simply retries.
+  - Each site has its own token, and the tokens travel only over HTTPS.
+
+  The office dashboard gets an **All sites** view. This was verified with two real servers and with
+  Docker Compose: a check-in made while the central server was down queued, then synced when it
+  came back.
 
 ## Measured results
 
-All numbers come from the scripts in `benchmarks/`, run on an **AMD Ryzen 7 3700X, CPU only
-(no GPU)**. Raw output is in `benchmarks/results/`.
+All numbers come from the scripts in `benchmarks/`, run on an **AMD Ryzen 7 3700X** CPU and,
+where shown, an **NVIDIA RTX 2060 SUPER** GPU. Raw output is in `benchmarks/results/`.
 
 **Verification accuracy: LFW, standard 10-fold protocol, 6,000 pairs**
 
@@ -93,14 +114,20 @@ also grows with the number of enrolled workers.
 
 **Speed: 640×480 frames**
 
-| Step | Time |
-|---|---|
-| Face detection (MTCNN) | 23.5 ms |
-| Embedding 4 faces one at a time → batched in one pass | 177.6 ms → **81.8 ms** (2.2× faster) |
-| Matching against 500 workers × 5 angles: Python loop → vectorized | 2.84 ms → **0.18 ms** (16× faster) |
-| Full pipeline, 1 face | 67.8 ms → **14.7 FPS** with the models on every frame |
-| Desktop demo, models on every 3rd frame | ~44 FPS model-bound (calculated), so it keeps up with a 30 FPS webcam |
-| Kiosk `/api/scan` (JPEG decode + pipeline + DB write, in-process) | **69.7 ms** |
+| Step | CPU | GPU |
+|---|---|---|
+| Face detection (MTCNN) | 23.6 ms | 24.8 ms |
+| Embedding 4 faces: one at a time → batched in one pass | 180.6 → **86.2 ms** | 71.9 → **20.9 ms** |
+| Matching against 500 workers × 5 angles: Python loop → vectorized | 3.15 → **0.17 ms** | (CPU work) |
+| Full pipeline, 1 face, models on every frame | 68.5 ms, **14.6 FPS** | 43.8 ms, **22.8 FPS** |
+| Desktop demo, models on every 3rd frame (calculated, model-bound) | ~44 FPS | ~68 FPS |
+| Kiosk `/api/scan` over HTTP to a local server (decode + pipeline + DB write) | **68 ms** | **45 ms** |
+
+Batching makes embedding 2.1× faster on the CPU and 3.4× on the GPU, and vectorizing makes matching about 19× faster. MTCNN
+doesn't speed up on the GPU, because its small cascaded networks are dominated by
+per-call overhead. An early GPU measurement of `/api/scan` read 110 ms. That turned out to be
+the test client starting a fresh thread per request, which re-creates CUDA handles each time.
+Against a real server it's 45 ms.
 
 **Liveness: does a turned head still match?** (`benchmarks/liveness_eval.py`, LFW)
 
@@ -163,7 +190,7 @@ real jobsite photos never used in training. 40 epochs took 7 minutes on an RTX 2
   the gate still has to be measured on real kiosk frames.
 
 The kiosk sends a frame every 400 ms. From a face entering the frame to the confirmation
-screen is about one scan interval plus about 70 ms of server time, plus network latency when
+screen is about one scan interval plus 45–70 ms of server time, plus the head turn (about 1–2 s), plus network latency when
 the server isn't on the same machine.
 
 ## Privacy by design
@@ -175,7 +202,9 @@ schedule, and deletion. The system is built around that:
   and agreed. The server rejects enrollment without `consent: true`, and the consent time is stored.
 - **Embeddings only, never photos.** Frames are processed in memory and discarded. The database
   holds 512 numbers per angle, stored as raw float32 (no pickle).
-- **Retention date** on every worker (enrollment + 1 year).
+- **Automatic deletion.** Face data and PIN are deleted after a year without a check-in (each
+  check-in resets the clock), and enrollments abandoned for 24 h are purged. A background job
+  runs at startup and hourly, logs each deletion, and stops recognizing that person right away.
 - **Delete my data.** Erases face embeddings and PIN immediately, and the kiosk stops recognizing
   them. Attendance rows stay, because payroll needs them.
 - **Audit log** of enrollments, deletions, PIN lockouts, musters and payroll exports.
@@ -211,13 +240,21 @@ The browser only allows camera access on `localhost` or HTTPS.
 There is also a desktop OpenCV demo using the same engine and database: `python main.py`
 (`--register` to enroll from the webcam).
 
+**Docker:** `docker compose --env-file NUL up --build` runs a jobsite server syncing to a central
+server. [docs/DEPLOY.md](docs/DEPLOY.md) covers settings, HTTPS for the camera, and hosting.
+
+**Docs:**
+- [docs/TESTING.md](docs/TESTING.md): manual webcam test checklist
+- [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md): how the demo video is recorded and built
+  (`scripts/make_demo_video.py`)
+
 ### Tests and benchmarks
 
 ```bash
-pytest                              # 78 fast tests (models stubbed): check-in rules, liveness, PPE, hours, PIN lockout, privacy, auth
+pytest                              # 96 fast tests (models stubbed): check-in rules, liveness, PPE, hours, PIN, privacy, retention, sync, auth
 python benchmarks/lfw_eval.py       # downloads LFW (~180 MB), writes benchmarks/results/lfw.json
 pytest -m slow                      # real-model tests: LFW photos (incl. head-turn direction), PPE detector on test photos
-python benchmarks/speed_bench.py    # writes benchmarks/results/speed.json
+python benchmarks/speed_bench.py    # writes speed_gpu.json on a GPU; add --cpu for speed.json
 python benchmarks/liveness_eval.py  # do turned faces still match? writes benchmarks/results/liveness.json
 python benchmarks/hardhat_eval.py synthetic   # LFW with a drawn hard hat (proxy)
 python scripts/capture_hardhat.py p01         # real captures, with consent; embeddings only
@@ -234,12 +271,13 @@ python scripts/train_ppe.py --eval-only       # re-measure the PPE detector, wri
   also skips the liveness check, since it is a separate factor.
 - **Hard-hat numbers are synthetic so far.** The proxy above uses drawn hats on LFW. Real
   captures (the kit is in `scripts/capture_hardhat.py`) and outdoor glare are still to measure.
-- **Face benchmarks are CPU numbers.** The face figures above were measured without a GPU; only
-  the PPE detector has GPU timings so far.
 - **PPE accuracy at the gate isn't measured yet.** The PPE test set is general jobsite photos.
   A tablet at the gate often won't see the vest at all, which is why "unknown" exists.
 - **License.** Ultralytics and the Construction-PPE dataset are AGPL-3.0. That's fine for this
   public repo, but a closed commercial product would need an Ultralytics license or a different
   detector. The trained weights aren't committed; `scripts/train_ppe.py` reproduces them.
-- Next: automatic deletion when the retention date passes, an offline queue for sites with
-  patchy internet, and deployment.
+- **Not tested by people yet.** Everything above is benchmarked or tested in code. The
+  webcam walkthrough in [docs/TESTING.md](docs/TESTING.md) is next, along with real hard-hat
+  captures.
+- Next: a hosted public demo (the Docker image is ready; see [docs/DEPLOY.md](docs/DEPLOY.md)),
+  PPE accuracy on real kiosk frames, and a trained anti-spoofing model.

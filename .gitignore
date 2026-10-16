@@ -19,3 +19,6 @@ benchmarks/results/*.npy
 # Trained model weights (reproduce with scripts/train_ppe.py)
 models/
 *.pt
+
+# Demo video: raw clips contain faces; build output is large
+demo/

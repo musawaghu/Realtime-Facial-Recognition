@@ -1,0 +1,18 @@
+# Keep secrets, biometric data and bulky local files out of the image
+.env
+*.db
+*.db-journal
+.venv/
+.git/
+.idea/
+__pycache__/
+*.pyc
+.pytest_cache/
+benchmarks/data/
+benchmarks/results/*.npy
+models/
+*.pt
+tests/
+docs/
+tasks/
+CLAUDE.md

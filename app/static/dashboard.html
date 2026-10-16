@@ -8,13 +8,14 @@
 </head>
 <body class="dash">
   <header>
-    <h1>Foreman Dashboard</h1>
+    <h1>Foreman Dashboard <span class="tag" id="sync-chip" hidden></span></h1>
     <nav id="tabs">
       <button data-tab="onsite" class="active">On site</button>
       <button data-tab="hours">Hours</button>
       <button data-tab="muster">Muster</button>
       <button data-tab="workers">Workers</button>
       <button data-tab="audit">Audit log</button>
+      <button data-tab="sites" id="sites-tab" hidden>All sites</button>
     </nav>
   </header>
 
@@ -68,10 +69,16 @@
     <section id="tab-workers" hidden>
       <div class="toolbar"><button class="primary" id="enroll-open">Enroll a worker</button></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>#</th><th>Name</th><th>Trade</th><th>Status</th><th>Face data kept until</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Name</th><th>Trade</th><th>Status</th><th>Face data auto-deleted on</th><th></th></tr></thead>
         <tbody id="workers-body"></tbody>
       </table></div>
       <p class="muted">The worker number (#) is what workers type on the kiosk keypad with their PIN.</p>
+    </section>
+
+    <!-- ALL SITES (central server only) -->
+    <section id="tab-sites" hidden>
+      <p class="muted">Attendance pushed by each site's own server. Sites keep working offline and catch up when the connection returns.</p>
+      <div id="sites-list"></div>
     </section>
 
     <!-- AUDIT -->
@@ -91,7 +98,7 @@
         <strong>Biometric data consent.</strong> This site uses face recognition to record check-in and
         check-out times and to know who is on site in an emergency. If you agree, the system stores a
         numeric template computed from your face (not a photo). It is used only for site attendance,
-        is never sold or shared, and is deleted when you ask, or automatically one year after enrollment.
+        is never sold or shared, and is deleted when you ask, or automatically after one year without a check-in.
         You may use a PIN instead of face recognition at any time.
       </div>
       <div class="form-grid">

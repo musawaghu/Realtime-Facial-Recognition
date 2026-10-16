@@ -49,7 +49,9 @@ PPE_CONF = 0.4               # detector confidence needed to count a helmet / ve
 # Enrollment
 MIN_ENROLL_CAPTURES = 3
 MAX_ENROLL_CAPTURES = 5
-RETENTION_DAYS = 365         # biometric data kept this long after enrollment
+RETENTION_DAYS = 365         # biometric data deleted after this long without a check-in
+ENROLL_ABANDON_HOURS = 24    # unfinished enrollments older than this are purged
+RETENTION_CHECK_S = 3600     # how often the server looks for expired data
 
 # Check-in rules
 EVENT_COOLDOWN_S = 60        # repeat scans within this window are ignored
@@ -61,3 +63,15 @@ PIN_LOCKOUT_S = 300
 
 # Uploads
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+
+# Offline-first sync (see app/sync.py). On-site server: set CENTRAL_URL + SYNC_TOKEN.
+SITE_ID = os.getenv("SITE_ID", "site-1")
+CENTRAL_URL = os.getenv("CENTRAL_URL", "")
+SYNC_TOKEN = os.getenv("SYNC_TOKEN", "")
+# Plain http:// to a non-localhost CENTRAL_URL is refused unless explicitly allowed, which is only
+# sensible on a private network (e.g. between docker compose containers)
+SYNC_ALLOW_HTTP = os.getenv("SYNC_ALLOW_HTTP", "") == "1"
+SYNC_INTERVAL_S = 30
+SYNC_BATCH = 500
+# Central server: which sites may push, and each site's token ("site-a:tok-a,site-b:tok-b")
+SITE_TOKENS = dict(pair.split(":", 1) for pair in os.getenv("SITE_TOKENS", "").split(",") if ":" in pair)

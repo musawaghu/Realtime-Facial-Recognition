@@ -11,5 +11,6 @@ python-multipart==0.0.20
 python-dotenv==1.0.1
 scikit-learn==1.5.2
 ultralytics==8.3.253      # PPE detector (AGPL-3.0); install with: pip install -r requirements.txt
+imageio-ffmpeg==0.5.1     # bundled ffmpeg for scripts/make_demo_video.py
 pytest==8.3.4
 httpx==0.28.1
