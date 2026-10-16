@@ -5,12 +5,12 @@ Measures on 640x480 frames:
   - embedding ms for 4 faces: one-at-a-time vs one batched forward pass
   - matching ms against a 500-worker x 5-angle gallery: Python loop vs one matrix product
   - full pipeline FPS for 1 face, with detection on every frame vs every 3rd frame (desktop demo)
-  - /api/scan round trip (in-process: JPEG decode + pipeline + DB write), what the kiosk waits for
+  - /api/scan round trip over HTTP to a local server (JPEG decode + pipeline + DB write), what the kiosk waits for
 
 Frames are built from LFW images (run lfw_eval.py first), so no webcam is needed.
 Pass --camera to time live webcam frames instead for the pipeline numbers.
 
-Run:  python benchmarks/speed_bench.py [--camera]
+Run:  python benchmarks/speed_bench.py [--camera] [--cpu]
 """
 import argparse
 import json
@@ -57,11 +57,12 @@ def frame_with(faces):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--camera", action="store_true", help="use webcam frames for pipeline timing")
+    parser.add_argument("--cpu", action="store_true", help="force CPU even if a GPU is available")
     args = parser.parse_args()
     if not LFW.exists():
         sys.exit("Run benchmarks/lfw_eval.py first (it downloads the LFW images used here).")
 
-    engine = FaceEngine()
+    engine = FaceEngine(device="cpu" if args.cpu else None)
     faces = lfw_faces(4)
     one = frame_with(faces[:1])
     four = frame_with(faces)
@@ -113,22 +114,39 @@ def main():
     # every 3rd frame runs the models; other frames only draw (cost ~0)
     r["fps_detect_every_3rd_frame_model_bound"] = round(3000 / pipeline_ms, 1)
 
-    # /api/scan round trip in-process
-    from fastapi.testclient import TestClient
+    # /api/scan round trip through a real uvicorn server over HTTP (what the kiosk waits for).
+    # TestClient without a context manager runs every request on a fresh thread, which on a GPU
+    # re-creates CUDA handles each time and overstated the latency (110 ms vs ~45 ms).
+    import threading
+    import httpx
+    import uvicorn
     from app import api
     from app.db import Database
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(str(Path(tmp) / "bench.db"))
-        api.app.dependency_overrides = {api.get_db: lambda: db, api.get_engine: lambda: engine}
+        api.get_db = lambda: db                      # also used by the background jobs
+        api.app.dependency_overrides = {api.get_db: lambda: db, api.get_engine: lambda: engine,
+                                        api.get_ppe: lambda: None}
         api.scan_limit.rate = api.scan_limit.burst = 10_000
-        client = TestClient(api.app)
+        server = uvicorn.Server(uvicorn.Config(api.app, host="127.0.0.1", port=8795, log_level="warning"))
+        threading.Thread(target=server.run, daemon=True).start()
+        while not server.started:
+            time.sleep(0.05)
         ok, jpg = cv2.imencode(".jpg", cv2.cvtColor(cv2.resize(one, (480, 360)), cv2.COLOR_RGB2BGR))
         files = {"file": ("f.jpg", jpg.tobytes(), "image/jpeg")}
-        r["api_scan_ms"] = round(timed(lambda: client.post("/api/scan", files=files), 20), 1)
+        with httpx.Client(base_url="http://127.0.0.1:8795") as client:
+            r["api_scan_ms"] = round(timed(lambda: client.post("/api/scan", files=files), 20), 1)
+        server.should_exit = True
+        time.sleep(0.5)
         api.app.dependency_overrides = {}
 
     RESULTS.mkdir(parents=True, exist_ok=True)
-    (RESULTS / "speed.json").write_text(json.dumps(r, indent=2))
+    # CPU and GPU runs go to separate files so neither overwrites the other
+    name = "speed.json" if engine.device == "cpu" else "speed_gpu.json"
+    if engine.device != "cpu":
+        import torch
+        r["gpu"] = torch.cuda.get_device_name(0)
+    (RESULTS / name).write_text(json.dumps(r, indent=2))
     print(json.dumps(r, indent=2))
 
 
