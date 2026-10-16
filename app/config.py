@@ -68,6 +68,9 @@ MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 SITE_ID = os.getenv("SITE_ID", "site-1")
 CENTRAL_URL = os.getenv("CENTRAL_URL", "")
 SYNC_TOKEN = os.getenv("SYNC_TOKEN", "")
+# Plain http:// to a non-localhost CENTRAL_URL is refused unless explicitly allowed, which is only
+# sensible on a private network (e.g. between docker compose containers)
+SYNC_ALLOW_HTTP = os.getenv("SYNC_ALLOW_HTTP", "") == "1"
 SYNC_INTERVAL_S = 30
 SYNC_BATCH = 500
 # Central server: which sites may push, and each site's token ("site-a:tok-a,site-b:tok-b")

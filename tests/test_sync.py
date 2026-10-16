@@ -135,6 +135,11 @@ def test_tokens_only_over_https():
         sync.SyncClient(None, None, central_url="http://central.example.com")
 
 
+def test_plain_http_needs_explicit_opt_in(monkeypatch):
+    monkeypatch.setattr(config, "SYNC_ALLOW_HTTP", True)
+    assert sync.secure_url("http://central:8000")      # e.g. docker compose service name
+
+
 def test_status_endpoints(site, central):
     central_client, central_db = central
     assert central_client.get("/api/sync/status", auth=("foreman", "pw")).json() == {"enabled": False, "pending": 0}

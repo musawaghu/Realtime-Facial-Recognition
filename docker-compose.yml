@@ -1,0 +1,43 @@
+# Local demo of the offline-first setup: one jobsite server syncing to a central server.
+#
+#   PowerShell:
+#     $env:ADMIN_PASSWORD="change-me"; $env:SYNC_TOKEN=(python -c "import secrets;print(secrets.token_urlsafe(24))")
+#     docker compose up --build
+#
+#   Site kiosk:        http://localhost:8000/kiosk
+#   Site dashboard:    http://localhost:8000/dashboard
+#   Central dashboard: http://localhost:8001/dashboard#sites
+#
+# Try "docker compose stop central": the site keeps checking people in and queues the
+# attendance; "docker compose start central" and it syncs. In production the site server runs on
+# the kiosk laptop and CENTRAL_URL is the central server's https:// address (no SYNC_ALLOW_HTTP).
+services:
+  site:
+    build: .
+    image: jobsite-checkin
+    ports: ["8000:8000"]
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      TZ: ${TZ:-America/Chicago}      # the jobsite's time zone: check-in times are local time
+      SITE_ID: site-a
+      CENTRAL_URL: http://central:8000
+      SYNC_ALLOW_HTTP: "1"            # only because this hop stays on compose's private network
+      SYNC_TOKEN: ${SYNC_TOKEN:?set SYNC_TOKEN}
+    volumes:
+      - site-data:/data
+      - ./models:/app/models:ro       # optional: trained PPE weights
+
+  central:
+    build: .
+    image: jobsite-checkin            # same image as the site (second build is cached)
+    ports: ["8001:8000"]
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      TZ: ${TZ:-America/Chicago}
+      SITE_TOKENS: site-a:${SYNC_TOKEN:?set SYNC_TOKEN}
+    volumes:
+      - central-data:/data
+
+volumes:
+  site-data:
+  central-data:

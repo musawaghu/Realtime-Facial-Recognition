@@ -21,9 +21,11 @@ log = logging.getLogger("jobsite.sync")
 
 
 def secure_url(url: str) -> bool:
-    """Tokens only travel over HTTPS (plain HTTP is allowed to localhost for development)."""
+    """Tokens only travel over HTTPS. Plain HTTP is allowed to localhost, or anywhere when
+    SYNC_ALLOW_HTTP=1 is set for a private network."""
     u = urlparse(url)
-    return u.scheme == "https" or (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1"))
+    return u.scheme == "https" or (u.scheme == "http" and (
+        u.hostname in ("localhost", "127.0.0.1") or config.SYNC_ALLOW_HTTP))
 
 
 class SyncClient:
