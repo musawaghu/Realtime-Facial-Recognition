@@ -6,11 +6,12 @@ accurate hours, and in an emergency the headcount is one click away.
 | Kiosk: liveness check | Kiosk: checked in, PPE warning |
 |---|---|
 | ![Kiosk asking the worker to turn their head left](docs/img/kiosk-turn.png) | ![Kiosk confirming check-in with a missing hard hat warning](docs/img/kiosk-ppe.png) |
-| **Dashboard: who's on site, with PPE** | **Dashboard: every site, synced from the field** |
-| ![Foreman dashboard listing workers on site with PPE flags](docs/img/dashboard-onsite.png) | ![Central dashboard showing two jobsites and who is on each](docs/img/dashboard-sites.png) |
+| **Dashboard: who's on site, with PPE** | **Emergency muster: one-click headcount** |
+| ![Foreman dashboard listing workers on site with PPE flags](docs/img/dashboard-onsite.png) | ![Muster roster with workers ticked off as accounted for](docs/img/dashboard-muster.png) |
+| **Weekly hours, CSV export for payroll** | **Every site, synced from the field** |
+| ![Hours per worker per day with an export button](docs/img/dashboard-hours.png) | ![Central dashboard showing two jobsites and who is on each](docs/img/dashboard-sites.png) |
 
 *Screenshots use made-up workers with no face data.*
-<!-- Demo video: add the link here once recorded (see docs/DEMO_SCRIPT.md) -->
 
 ## The problem
 

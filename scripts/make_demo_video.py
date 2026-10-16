@@ -136,13 +136,21 @@ def fill_demo_database():
     seed_demo.main()
     db = Database()
     now = datetime.now()
-    on_site = {w["id"] for w in db.on_site_now(now)}
+    # Replace today's seeded history with a crew that is mid-shift right now, so the tour looks
+    # like a working day whatever time the script runs.
+    with db._conn() as c:
+        c.execute("DELETE FROM events WHERE ts >= ?", (now.strftime("%Y-%m-%d 00:00:00"),))
     workers = [w["id"] for w in db.list_workers()]
     ppe_for = {2: {"hard_hat": False, "vest": True}, 5: {"hard_hat": True, "vest": False}}
-    for i, wid in enumerate(workers[:9]):
-        if wid not in on_site:
-            db.record_scan(wid, "pin" if i == 3 else "face", 0.8, now=now - timedelta(minutes=95 - 7 * i),
-                           ppe=ppe_for.get(i, {"hard_hat": True, "vest": True}))
+    for i, wid in enumerate(workers[:9]):   # on site now, arrived 1-2.5 h ago
+        pin = i == 3                        # PIN check-ins have no camera frame, so no PPE check
+        db.record_scan(wid, "pin" if pin else "face", None if pin else 0.8, now=now - timedelta(minutes=150 - 11 * i),
+                       ppe=None if pin else ppe_for.get(i, {"hard_hat": True, "vest": True}))
+    for i, wid in enumerate(workers[9:]):   # came in early and already left
+        t_in = now - timedelta(hours=6, minutes=10 * i)
+        if t_in.date() == now.date():
+            db.record_scan(wid, "face", 0.8, now=t_in, ppe={"hard_hat": True, "vest": True})
+            db.record_scan(wid, "face", 0.8, now=now - timedelta(minutes=40 - 5 * i))
     mid = db.start_muster(now=now - timedelta(minutes=2))
     for wid in [e["worker_id"] for e in db.get_muster(mid)["entries"]][:5]:
         db.set_accounted(mid, wid, True, now=now - timedelta(minutes=1))
@@ -162,9 +170,9 @@ def dashboard_tour(port=8790) -> list[tuple[Path, str]]:
     if not exe:
         print("No Edge/Chrome found: skipping the dashboard tour")
         return []
-    if not 8 <= datetime.now().hour < 18:
-        print("Note: built outside working hours, so 'today' on the dashboard looks quiet. "
-              "Build during the day for the most realistic tour.")
+    if datetime.now().hour < 3:
+        print("Note: just after midnight the crew's check-ins fall on yesterday, so 'today' looks "
+              "quiet. Build after 3 AM for the most realistic tour.")
     import uvicorn
     from app import api
     db = fill_demo_database()
