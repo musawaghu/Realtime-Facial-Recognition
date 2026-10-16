@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Site Check-in</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="kiosk">
+  <header>
+    <h1>Site Check-in</h1>
+    <div class="clock" id="clock"></div>
+  </header>
+
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay" class="overlay"></canvas>
+
+    <!-- Big confirmation shown after a check-in / check-out -->
+    <div class="confirm" id="confirm">
+      <div class="big" id="confirm-title"></div>
+      <div class="name" id="confirm-name"></div>
+    </div>
+
+    <!-- PIN fallback: worker number, then PIN -->
+    <div class="keypad-wrap" id="keypad">
+      <div class="prompt" id="keypad-prompt">Enter your worker number</div>
+      <div class="entry" id="keypad-entry"></div>
+      <div class="keypad" id="keys"></div>
+      <div class="keypad-msg" id="keypad-msg"></div>
+      <button id="keypad-cancel">Cancel</button>
+    </div>
+  </div>
+
+  <div class="status">
+    <span id="status">Starting camera…</span>
+    <button id="pin-btn">Use PIN</button>
+  </div>
+
+  <script src="/static/kiosk.js"></script>
+</body>
+</html>
