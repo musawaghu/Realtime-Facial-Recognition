@@ -154,7 +154,7 @@ class Database:
             return [dict(r) for r in rows]
 
     def delete_worker_biometrics(self, worker_id: int, actor: str = "foreman",
-                                 now: datetime | None = None) -> bool:
+                                 now: datetime | None = None, reason: str = "") -> bool:
         """'Delete my data': remove face embeddings and PIN. Attendance rows stay for payroll."""
         now = now or datetime.now()
         with self._conn() as c:
@@ -164,9 +164,29 @@ class Database:
             c.execute("DELETE FROM embeddings WHERE worker_id = ?", (worker_id,))
             c.execute("""UPDATE workers SET pin_hash = NULL, pin_salt = NULL, deleted_at = ?
                          WHERE id = ?""", (_fmt(now), worker_id))
-            self.audit(actor, "delete_biometrics", worker_id, "", now, conn=c)
+            self.audit(actor, "delete_biometrics", worker_id, reason, now, conn=c)
             return True
 
+    def purge_expired(self, now: datetime | None = None) -> list[int]:
+        """Automatic deletion. Removes biometric data for:
+          - workers whose retention date has passed (a year without a check-in), and
+          - enrollments abandoned before finishing (face data for nobody).
+        Returns the worker ids purged.
+        """
+        now = now or datetime.now()
+        abandoned_before = _fmt(now - timedelta(hours=config.ENROLL_ABANDON_HOURS))
+        with self._conn() as c:
+            expired = [r["id"] for r in c.execute(
+                "SELECT id FROM workers WHERE deleted_at IS NULL AND retention_until < ?", (_fmt(now),))]
+            abandoned = [r["id"] for r in c.execute(
+                """SELECT id FROM workers WHERE deleted_at IS NULL AND enrolled_at IS NULL
+                   AND created_at < ?""", (abandoned_before,))]
+        for wid in expired:
+            self.delete_worker_biometrics(wid, actor="retention", now=now,
+                                          reason=f"no check-in for {config.RETENTION_DAYS} days")
+        for wid in set(abandoned) - set(expired):
+            self.delete_worker_biometrics(wid, actor="retention", now=now, reason="enrollment never finished")
+        return sorted(set(expired) | set(abandoned))
     # ---------- embeddings ----------
     def add_embedding(self, worker_id: int, vector: np.ndarray) -> int:
         """Store one capture; returns how many captures the worker now has."""
@@ -249,6 +269,9 @@ class Database:
                 kind = "out" if last["kind"] == "in" and not stale else "in"
             else:
                 kind = "in"
+            # every check-in or check-out restarts the retention clock
+            c.execute("UPDATE workers SET retention_until = ? WHERE id = ? AND deleted_at IS NULL",
+                      (_fmt(now + timedelta(days=config.RETENTION_DAYS)), worker_id))
             ppe = ppe or {}
             c.execute("""INSERT INTO events (worker_id, kind, method, similarity, hard_hat, vest, ts)
                          VALUES (?,?,?,?,?,?,?)""",

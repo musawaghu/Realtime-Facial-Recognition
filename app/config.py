@@ -49,7 +49,9 @@ PPE_CONF = 0.4               # detector confidence needed to count a helmet / ve
 # Enrollment
 MIN_ENROLL_CAPTURES = 3
 MAX_ENROLL_CAPTURES = 5
-RETENTION_DAYS = 365         # biometric data kept this long after enrollment
+RETENTION_DAYS = 365         # biometric data deleted after this long without a check-in
+ENROLL_ABANDON_HOURS = 24    # unfinished enrollments older than this are purged
+RETENTION_CHECK_S = 3600     # how often the server looks for expired data
 
 # Check-in rules
 EVENT_COOLDOWN_S = 60        # repeat scans within this window are ignored

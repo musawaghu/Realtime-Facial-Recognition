@@ -4,11 +4,14 @@ Run:  uvicorn app.api:app --reload
 Kiosk:     http://localhost:8000/kiosk       (open: it's the device at the gate)
 Dashboard: http://localhost:8000/dashboard   (HTTP Basic: foreman / ADMIN_PASSWORD)
 """
+import asyncio
 import csv
 import io
+import logging
 import secrets
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
@@ -26,7 +29,30 @@ from app.db import Database
 
 STATIC = Path(__file__).parent / "static"
 
-app = FastAPI(title="Jobsite Check-in")
+log = logging.getLogger("jobsite")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    """Background job: automatic deletion of expired biometric data, at startup and hourly."""
+    async def retention_loop():
+        while True:
+            try:
+                # use the face models only if they're already loaded; never load them just for this
+                engine = get_engine() if get_engine.cache_info().currsize else None
+                purged = await asyncio.to_thread(run_retention, get_db(), engine)
+                if purged:
+                    log.info("retention: deleted biometric data for workers %s", purged)
+            except Exception:
+                log.exception("retention job failed; will retry")
+            await asyncio.sleep(config.RETENTION_CHECK_S)
+
+    task = asyncio.create_task(retention_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Jobsite Check-in", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
@@ -54,6 +80,14 @@ def get_ppe():
         return None
     from app.ppe import PPEChecker
     return PPEChecker()
+
+
+def run_retention(db: Database, engine=None) -> list[int]:
+    """Purge expired / abandoned biometric data; stop recognizing those workers right away."""
+    purged = db.purge_expired()
+    if purged and engine is not None:
+        reload_gallery(db, engine)
+    return purged
 
 
 def reload_gallery(db: Database, engine):
