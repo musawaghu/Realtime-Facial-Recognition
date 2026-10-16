@@ -83,7 +83,9 @@ $("hours-end").value = today();
 loaders.hours = async () => {
   const q = `start=${$("hours-start").value}&end=${$("hours-end").value}`;
   try {
-    const rows = await api(`/api/hours?${q}`);
+    // newest day first (what a foreman checks), names A–Z within a day
+    const rows = (await api(`/api/hours?${q}`))
+      .sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
     fillTable($("hours-body"), rows, r => {
       const tr = document.createElement("tr");
       const notes = cell("");
