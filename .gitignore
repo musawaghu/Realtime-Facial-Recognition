@@ -15,3 +15,7 @@ __pycache__/
 # Benchmark data and raw outputs
 benchmarks/data/
 benchmarks/results/*.npy
+
+# Trained model weights (reproduce with scripts/train_ppe.py)
+models/
+*.pt

@@ -37,3 +37,12 @@
 - [x] Real capture kit (consent, IDs not names, embeddings only) + real eval, tested with synthetic files
 - [ ] Real captures: you + consenting friends (python scripts/capture_hardhat.py p01), then hardhat_eval.py real
 - [ ] Outdoor/glare condition (e.g. --conditions nohat hat hat_outdoor)
+
+# Round 4 — PPE detection (hard hat + vest), warn and log
+
+- [x] Trained YOLO11n on Construction-PPE (AGPL-3.0): GPU, 40 epochs, 7 min
+- [x] Test split: helmet P 0.889 / R 0.901, vest P 0.772 / R 0.876; 15.6 ms GPU, 61 ms CPU
+- [x] Detections matched to the person by face position; vest unknown when torso not visible
+- [x] Check-in never blocked; kiosk warning, event columns, audit log, dashboard PPE column
+- [x] CPU training was killed for low system RAM; moved to the GPU (CUDA build of torch 2.2.2)
+- [ ] Measure PPE accuracy on real kiosk frames

@@ -74,7 +74,8 @@ async function scanOnce() {
   } else if (r.status === "checked_in" || r.status === "checked_out") {
     unknownStreak = 0;
     showConfirm(r.status === "checked_in" ? "in" : "out",
-                r.status === "checked_in" ? `Checked in · ${r.time}` : `Checked out · ${r.time}`, r.name);
+                r.status === "checked_in" ? `Checked in · ${r.time}` : `Checked out · ${r.time}`, r.name,
+                r.status === "checked_in" ? ppeWarning(r.ppe) : "");
   } else if (r.status === "cooldown") {
     showConfirm("warn", `Already recorded · ${r.time}`, r.name);
   } else if (r.status === "unknown") {
@@ -107,17 +108,27 @@ function endChallenge() {
   turnPrompt.className = "turn-prompt";
 }
 
-function showConfirm(kind, title, name) {
+// Missing PPE never blocks check-in; the worker is told, and the foreman sees it on the dashboard.
+function ppeWarning(ppe) {
+  if (!ppe) return "";
+  const missing = [];
+  if (ppe.hard_hat === false) missing.push("hard hat");
+  if (ppe.vest === false) missing.push("hi-vis vest");
+  return missing.length ? `⚠ No ${missing.join(" or ")} detected. Put it on before entering the site.` : "";
+}
+
+function showConfirm(kind, title, name, note = "") {
   paused = true;
   drawBox(null);
   confirmEl.className = `confirm show ${kind}`;
   document.getElementById("confirm-title").textContent = title;
   document.getElementById("confirm-name").textContent = name;
+  document.getElementById("confirm-note").textContent = note;
   setTimeout(() => {
     confirmEl.className = "confirm";
     setStatus("Step up to the camera");
     paused = false;
-  }, CONFIRM_MS);
+  }, note ? CONFIRM_MS + 2000 : CONFIRM_MS);   // give a PPE warning time to be read
 }
 
 // ---------- PIN fallback ----------

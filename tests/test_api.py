@@ -47,7 +47,8 @@ class FakeEngine:
 def ctx(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_PASSWORD", "test-pass")
     db, engine = Database(str(tmp_path / "t.db")), FakeEngine()
-    api.app.dependency_overrides = {api.get_db: lambda: db, api.get_engine: lambda: engine}
+    api.app.dependency_overrides = {api.get_db: lambda: db, api.get_engine: lambda: engine,
+                                    api.get_ppe: lambda: None}   # PPE off unless a test turns it on
     # fresh rate limiters per test
     monkeypatch.setattr(api.scan_limit, "buckets", {})
     monkeypatch.setattr(api.pin_limit, "buckets", {})
@@ -336,3 +337,53 @@ def test_challenge_token_is_single_use(ctx):
     engine.show(face_vec(1), yaw=turn_for(r["direction"]))
     assert scan(client, r["challenge"])["status"] == "checked_in"
     assert scan(client, r["challenge"]) == {"status": "challenge_failed", "reason": "unknown_challenge"}
+
+
+# ---------- PPE ----------
+class FakePPE:
+    def __init__(self, result):
+        self.result, self.calls = result, 0
+
+    def check(self, rgb, face_box):
+        self.calls += 1
+        return self.result
+
+
+def test_missing_ppe_warns_and_logs_but_checks_in(ctx):
+    client, db, engine = ctx
+    fake = FakePPE({"hard_hat": False, "vest": True})
+    api.app.dependency_overrides[api.get_ppe] = lambda: fake
+    wid = enroll(client, engine)
+    r = face_checkin(client, engine, face_vec(1))
+    assert r["status"] == "checked_in" and r["ppe"] == {"hard_hat": False, "vest": True}
+    assert fake.calls == 1                         # checked once, on the frontal frame
+    onsite = client.get("/api/onsite", auth=AUTH).json()
+    assert onsite[0]["hard_hat"] == 0 and onsite[0]["vest"] == 1
+    audit = db.list_audit()[0]
+    assert audit["action"] == "ppe_missing" and audit["worker_id"] == wid and audit["detail"] == "no hard hat"
+
+
+def test_full_ppe_is_not_logged(ctx):
+    client, db, engine = ctx
+    api.app.dependency_overrides[api.get_ppe] = lambda: FakePPE({"hard_hat": True, "vest": None})
+    enroll(client, engine)
+    r = face_checkin(client, engine, face_vec(1))
+    assert r["ppe"] == {"hard_hat": True, "vest": None}      # vest unknown: torso not in view
+    assert all(a["action"] != "ppe_missing" for a in db.list_audit())
+
+
+def test_checkout_without_ppe_is_not_flagged(ctx, monkeypatch):
+    client, db, engine = ctx
+    monkeypatch.setattr(config, "EVENT_COOLDOWN_S", 0)
+    enroll(client, engine)
+    face_checkin(client, engine, face_vec(1))                 # in, PPE not checked
+    api.app.dependency_overrides[api.get_ppe] = lambda: FakePPE({"hard_hat": False, "vest": False})
+    assert face_checkin(client, engine, face_vec(1))["status"] == "checked_out"
+    assert all(a["action"] != "ppe_missing" for a in db.list_audit())   # hat off on the way out is fine
+
+
+def test_without_detector_ppe_is_unknown(ctx):
+    client, _, engine = ctx
+    enroll(client, engine)
+    assert face_checkin(client, engine, face_vec(1))["ppe"] is None
+    assert client.get("/api/onsite", auth=AUTH).json()[0]["hard_hat"] is None

@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS events (
     kind       TEXT NOT NULL CHECK (kind IN ('in', 'out')),
     method     TEXT NOT NULL CHECK (method IN ('face', 'pin')),
     similarity REAL,
+    hard_hat   INTEGER,                 -- PPE seen at check-in: 1 yes, 0 no, NULL not checked
+    vest       INTEGER,
     ts         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_worker_ts ON events(worker_id, ts);
@@ -83,6 +85,11 @@ class Database:
         self.path = path
         with self._conn() as c:
             c.executescript(SCHEMA)
+            # databases created before the PPE check: add its columns
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(events)")}
+            for col in ("hard_hat", "vest"):
+                if col not in cols:
+                    c.execute(f"ALTER TABLE events ADD COLUMN {col} INTEGER")
 
     @contextmanager
     def _conn(self):
@@ -220,8 +227,11 @@ class Database:
 
     # ---------- check-in / check-out ----------
     def record_scan(self, worker_id: int, method: str, similarity: float | None = None,
-                    now: datetime | None = None) -> tuple[str, str]:
+                    now: datetime | None = None, ppe: dict | None = None) -> tuple[str, str]:
         """Flip the worker between in and out. Returns (status, timestamp).
+
+        `ppe` is {"hard_hat": bool|None, "vest": bool|None} from the kiosk camera, if checked.
+        Missing PPE at check-in is audit-logged for the foreman; it never blocks the check-in.
 
         status is 'checked_in', 'checked_out', or 'cooldown' (a repeat scan that was ignored).
         A previous 'in' older than MAX_SHIFT_HOURS counts as a missed check-out, so the
@@ -239,8 +249,13 @@ class Database:
                 kind = "out" if last["kind"] == "in" and not stale else "in"
             else:
                 kind = "in"
-            c.execute("INSERT INTO events (worker_id, kind, method, similarity, ts) VALUES (?,?,?,?,?)",
-                      (worker_id, kind, method, similarity, _fmt(now)))
+            ppe = ppe or {}
+            c.execute("""INSERT INTO events (worker_id, kind, method, similarity, hard_hat, vest, ts)
+                         VALUES (?,?,?,?,?,?,?)""",
+                      (worker_id, kind, method, similarity, ppe.get("hard_hat"), ppe.get("vest"), _fmt(now)))
+            missing = [item for item, key in (("hard hat", "hard_hat"), ("vest", "vest")) if ppe.get(key) is False]
+            if kind == "in" and missing:
+                self.audit("kiosk", "ppe_missing", worker_id, "no " + ", no ".join(missing), now, conn=c)
             return ("checked_in" if kind == "in" else "checked_out"), _fmt(now)
 
     def in_cooldown(self, worker_id: int, now: datetime | None = None) -> str | None:
@@ -259,7 +274,7 @@ class Database:
         cutoff = _fmt(now - timedelta(hours=config.MAX_SHIFT_HOURS))
         with self._conn() as c:
             rows = c.execute(
-                """SELECT w.id, w.name, w.trade, e.ts AS since, e.method
+                """SELECT w.id, w.name, w.trade, e.ts AS since, e.method, e.hard_hat, e.vest
                    FROM events e JOIN workers w ON w.id = e.worker_id
                    WHERE e.id = (SELECT id FROM events WHERE worker_id = e.worker_id
                                  ORDER BY ts DESC, id DESC LIMIT 1)
