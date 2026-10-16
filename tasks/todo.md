@@ -17,3 +17,14 @@
 - Not yet covered by automated tests: the browser JS (kiosk keypad, enrollment capture loop).
 - Next round: liveness (head-turn using landmarks), hard-hat accuracy test, PPE, retention job,
   offline queue, deployment.
+
+# Round 2 — Liveness (random head turn)
+
+- [x] Calibrate yaw on 1,500 LFW faces (median 0.10, p95 0.29); check sign by eye (George_Clooney_0002)
+- [x] app/liveness.py: yaw, frontal check, box continuity, challenge store with 6 s timeout
+- [x] /api/scan: recognition issues a challenge; check-in only after the requested turn
+- [x] Identity re-checked on the turned face (LFW 1%-FAR threshold), audit log on failure
+- [x] Kiosk prompt (arrow + text), faster sampling during the challenge
+- [x] Tests: 17 new fast tests (photo held still, wrong direction, timeout, swaps, token reuse), real-photo sign test
+- [x] benchmarks/liveness_eval.py: 124/124 turned faces still match (README)
+- [ ] Manual: try it with a webcam, plus a printed photo and a phone photo

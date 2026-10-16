@@ -49,3 +49,14 @@ def test_embeddings_are_unit_length_and_batched(engine):
     assert emb.shape == (3, 512)
     np.testing.assert_allclose(np.linalg.norm(emb, axis=1), 1, atol=1e-5)
     np.testing.assert_allclose(emb[0], emb[2], atol=1e-5)
+
+
+def test_head_turn_direction_on_a_real_photo(engine):
+    """George_Clooney_0002 is turned toward his own left (checked by eye). The kiosk's
+    challenge depends on this sign convention, so pin it with the real detector."""
+    from app import config, liveness
+    rgb = photo("George_Clooney", 2)
+    _, _, lm = engine.detect(rgb)
+    assert liveness.yaw(lm[0]) > config.LIVENESS_TURN_YAW
+    _, _, lm = engine.detect(rgb[:, ::-1].copy())          # mirror image: turned to his right
+    assert liveness.yaw(lm[0]) < -config.LIVENESS_TURN_YAW

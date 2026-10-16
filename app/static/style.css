@@ -57,6 +57,22 @@ input {
 .confirm .big { font-size: clamp(36px, 7vw, 72px); font-weight: 800; }
 .confirm .name { font-size: clamp(28px, 5vw, 52px); }
 
+/* Liveness prompt: arrow on the side the worker should turn toward (preview is mirrored) */
+.turn-prompt {
+  position: absolute; left: 0; right: 0; top: 0; display: none; z-index: 4;
+  justify-content: center; align-items: center; gap: 18px; padding: 18px;
+  background: rgba(0, 0, 0, .7); text-align: center;
+}
+.turn-prompt.show { display: flex; }
+.turn-prompt .arrow { font-size: clamp(56px, 10vw, 96px); line-height: 1; color: var(--accent); }
+.turn-prompt.left .arrow { animation: nudge-left 1s ease-in-out infinite; }
+.turn-prompt.right { flex-direction: row-reverse; }
+.turn-prompt.right .arrow { transform: scaleX(-1); animation: nudge-right 1s ease-in-out infinite; }
+.turn-text { font-size: clamp(24px, 4vw, 40px); font-weight: 800; }
+@keyframes nudge-left { 50% { transform: translateX(-14px); } }
+@keyframes nudge-right { 0%, 100% { transform: scaleX(-1); } 50% { transform: scaleX(-1) translateX(-14px); } }
+@media (prefers-reduced-motion: reduce) { .turn-prompt .arrow { animation: none !important; } }
+
 /* PIN keypad: big targets for gloved hands */
 .keypad-wrap {
   position: absolute; inset: 0; background: rgba(0, 0, 0, .92); z-index: 10;

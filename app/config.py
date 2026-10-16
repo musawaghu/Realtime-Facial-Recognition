@@ -21,17 +21,26 @@ MIN_FACE_SIZE = 40           # pixels; smaller faces are ignored
 FACE_MARGIN = 14             # pixels of context kept around each face crop
 
 
-def _benchmark_threshold(default: float) -> float:
-    """Use the threshold measured on LFW (benchmarks/lfw_eval.py) when available."""
+def _benchmark_threshold(key: str, default: float) -> float:
+    """Use a threshold measured on LFW (benchmarks/lfw_eval.py) when available."""
     path = ROOT / "benchmarks" / "results" / "lfw.json"
     try:
-        return float(json.loads(path.read_text())["threshold_far_0.1"])
+        return float(json.loads(path.read_text())[key])
     except (OSError, KeyError, ValueError):
         return default
 
 
 # Matching: cosine similarity between embeddings (higher = more alike)
-MATCH_THRESHOLD = _benchmark_threshold(default=0.5)
+MATCH_THRESHOLD = _benchmark_threshold("threshold_far_0.1", default=0.5)
+
+# Liveness (head-turn challenge). Yaw = nose offset from the eye midpoint, in eye-widths.
+# On 1,500 LFW faces |yaw| has median 0.10 and 95th percentile 0.29.
+LIVENESS_FRONTAL_YAW = 0.25  # must face the camera this squarely before a challenge starts
+LIVENESS_TURN_YAW = 0.35     # turn needed in the requested direction to pass
+LIVENESS_TIMEOUT_S = 6
+# A turned face matches less well than a frontal one, so identity during the turn uses the
+# looser LFW threshold at 1% false accepts (the frontal frame already passed the strict one).
+LIVENESS_MATCH_THRESHOLD = _benchmark_threshold("threshold_far_1", default=0.4)
 
 # Enrollment
 MIN_ENROLL_CAPTURES = 3

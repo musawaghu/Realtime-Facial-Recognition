@@ -1,5 +1,7 @@
 // Kiosk: sends a camera frame to the server ~2.5 times a second and shows the result.
+// A recognized worker must then turn their head as asked (liveness check) before check-in.
 const SCAN_INTERVAL_MS = 400;
+const CHALLENGE_INTERVAL_MS = 250; // sample faster while watching the head turn
 const CONFIRM_MS = 3000;
 const FRAME_WIDTH = 480;           // downscale before upload: faster, and plenty for a face at the gate
 
@@ -11,6 +13,8 @@ const frame = document.createElement("canvas");
 
 let paused = false;                // true while a confirmation or the keypad is showing
 let unknownStreak = 0;
+let challenge = null;              // token of the open head-turn challenge, if any
+const turnPrompt = document.getElementById("turn-prompt");
 
 // ---------- clock ----------
 const clock = document.getElementById("clock");
@@ -50,13 +54,24 @@ function grabFrame() {
 async function scanOnce() {
   const form = new FormData();
   form.append("file", await grabFrame(), "frame.jpg");
+  if (challenge) form.append("challenge", challenge);
   const res = await fetch("/api/scan", { method: "POST", body: form });
   if (res.status === 429) return;                    // rate-limited: just try again next tick
   if (!res.ok) throw new Error(res.status);
   const r = await res.json();
   drawBox(r.box);
+  if (r.status !== "turn") endChallenge();
 
-  if (r.status === "checked_in" || r.status === "checked_out") {
+  if (r.status === "turn") {
+    unknownStreak = 0;
+    challenge = r.challenge;
+    showTurnPrompt(r.direction, r.name);
+  } else if (r.status === "challenge_failed") {
+    setStatus("Didn’t catch that — look at the camera and try again");
+    await new Promise(res => setTimeout(res, 1500));
+  } else if (r.status === "look_straight") {
+    setStatus("Look straight at the camera");
+  } else if (r.status === "checked_in" || r.status === "checked_out") {
     unknownStreak = 0;
     showConfirm(r.status === "checked_in" ? "in" : "out",
                 r.status === "checked_in" ? `Checked in · ${r.time}` : `Checked out · ${r.time}`, r.name);
@@ -76,8 +91,20 @@ async function scanLoop() {
     if (!paused && video.readyState >= 2) {
       try { await scanOnce(); } catch { setStatus("Connection problem — retrying"); }
     }
-    await new Promise(r => setTimeout(r, SCAN_INTERVAL_MS));
+    await new Promise(r => setTimeout(r, challenge ? CHALLENGE_INTERVAL_MS : SCAN_INTERVAL_MS));
   }
+}
+
+function showTurnPrompt(direction, name) {
+  turnPrompt.className = `turn-prompt show ${direction}`;
+  document.getElementById("turn-arrow").textContent = "⬅";   // CSS mirrors it for "right"
+  document.getElementById("turn-text").textContent = `Turn your head to your ${direction.toUpperCase()}`;
+  if (name) setStatus(`Hi ${name} — quick check that you’re really here`);
+}
+
+function endChallenge() {
+  challenge = null;
+  turnPrompt.className = "turn-prompt";
 }
 
 function showConfirm(kind, title, name) {
@@ -103,7 +130,7 @@ let step = "id", digits = "", workerId = null;
 function renderEntry() { entry.textContent = step === "pin" ? "•".repeat(digits.length) : digits; }
 
 function openKeypad() {
-  paused = true; step = "id"; digits = ""; workerId = null;
+  paused = true; endChallenge(); step = "id"; digits = ""; workerId = null;
   prompt.textContent = "Enter your worker number"; msg.textContent = "";
   renderEntry(); keypad.classList.add("show");
 }
